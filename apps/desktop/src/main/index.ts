@@ -13,6 +13,7 @@ import {
   type IpcMainInvokeEvent,
   type WebContents
 } from 'electron'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { promises as fsp } from 'node:fs'
@@ -23,6 +24,7 @@ import type {
   NoteMeta,
   NoteCommentInput,
   NoteFolder,
+  LocalVaultEntry,
   RemoteWorkspaceInfo,
   RemoteWorkspaceProfile,
   RemoteWorkspaceProfileInput,
@@ -71,6 +73,7 @@ import {
   type PersistedRemoteWorkspaceConfig,
   type PersistedRemoteWorkspaceProfile,
   type PersistedWindowState,
+  rememberLocalVault,
   updateConfig,
   unarchiveNote,
   vaultInfo,
@@ -84,6 +87,7 @@ import {
 } from './secret-store'
 import { scanAllTasks, scanTasksForPath } from './tasks'
 import { VaultWatcher } from './watcher'
+import { WindowVaultRegistry } from './window-vaults'
 import { renderTikz } from './tikz'
 import { RemoteServerClient } from './remote/server-client'
 import {
@@ -140,7 +144,7 @@ protocol.registerSchemesAsPrivileged([
 
 let mainWindow: BrowserWindow | null = null
 let mainWindowReadyForAppEvents = false
-let creatingMainWindow: Promise<void> | null = null
+let creatingMainWindow: Promise<BrowserWindow> | null = null
 let currentVault: VaultInfo | null = null
 let currentWorkspaceMode: 'local' | 'remote' = 'local'
 let remoteWorkspaceConfig: PersistedRemoteWorkspaceConfig | null = null
@@ -148,7 +152,19 @@ let currentRemoteWorkspaceProfileId: string | null = null
 let remoteWorkspaceClient: RemoteServerClient | null = null
 let remoteServerCapabilities: ServerCapabilities | null = null
 let stopRemoteVaultWatch: (() => void) | null = null
-const watcher = new VaultWatcher()
+const ipcWindowContext = new AsyncLocalStorage<BrowserWindow>()
+const windowVaults = new WindowVaultRegistry({
+  makeWatcher: () => new VaultWatcher(),
+  invalidateVault: (root, ev) => {
+    invalidateNoteMetaCache(root, ev.scope === 'vault-settings' ? undefined : ev.path)
+    invalidateVaultTextSearchCache(root)
+  },
+  sendVaultChange: (windowId, ev) => {
+    const win = BrowserWindow.fromId(windowId)
+    if (!win || win.isDestroyed()) return
+    win.webContents.send(IPC.VAULT_ON_CHANGE, ev)
+  }
+})
 const DEFAULT_WINDOW_WIDTH = 1280
 const DEFAULT_WINDOW_HEIGHT = 820
 const MIN_WINDOW_WIDTH = 900
@@ -159,6 +175,7 @@ const MIN_ZOOM_FACTOR = 0.5
 const MAX_ZOOM_FACTOR = 3
 const ZOOM_STEP = 0.1
 const MAC_WINDOW_BACKGROUND_COLOR = '#1f1f1f'
+const MAIN_WINDOW_TABBING_IDENTIFIER = 'zennotes-vault-window'
 const APP_WEBSITE_URL = 'https://zennotes.org'
 const APP_DISCORD_URL = 'https://discord.gg/W4fWzapKS6'
 const APP_REPOSITORY_URL = 'https://github.com/ZenNotes/zennotes'
@@ -304,10 +321,35 @@ function decodeRemoteAssetRequest(url: string): { baseUrl: string; relPath: stri
   }
 }
 
+function currentIpcWindow(): BrowserWindow | null {
+  const win = ipcWindowContext.getStore()
+  return win && !win.isDestroyed() ? win : null
+}
+
+function requireEventWindow(event: IpcMainEvent | IpcMainInvokeEvent): BrowserWindow {
+  const win = BrowserWindow.fromWebContents(event.sender)
+  if (!win || win.isDestroyed()) {
+    throw new Error('No window is associated with this IPC call.')
+  }
+  return win
+}
+
 function isPathInsideVault(absPath: string): boolean {
+  const win = currentIpcWindow()
+  if (win) return windowVaults.isPathInsideWindowVault(win.id, absPath)
+  if (windowVaults.isPathInsideOpenLocalVault(absPath)) return true
   if (!currentVault) return false
   const resolved = path.resolve(absPath)
   const root = path.resolve(currentVault.root)
+  return resolved === root || resolved.startsWith(root + path.sep)
+}
+
+function isPathInsideWindowVault(win: BrowserWindow, absPath: string): boolean {
+  if (windowVaults.isPathInsideWindowVault(win.id, absPath)) return true
+  const vault = windowVaults.vaultForWindow(win.id)
+  if (!vault) return false
+  const resolved = path.resolve(absPath)
+  const root = path.resolve(vault.root)
   return resolved === root || resolved.startsWith(root + path.sep)
 }
 
@@ -315,7 +357,7 @@ function installNavigationGuards(win: BrowserWindow): void {
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith(`${LOCAL_ASSET_SCHEME}://`)) {
       const abs = decodeLocalAssetRequestPath(url)
-      if (abs && isPathInsideVault(abs)) {
+      if (abs && isPathInsideWindowVault(win, abs)) {
         void shell.openPath(abs)
       }
       return { action: 'deny' }
@@ -329,7 +371,7 @@ function installNavigationGuards(win: BrowserWindow): void {
     event.preventDefault()
     if (url.startsWith(`${LOCAL_ASSET_SCHEME}://`)) {
       const abs = decodeLocalAssetRequestPath(url)
-      if (abs && isPathInsideVault(abs)) {
+      if (abs && isPathInsideWindowVault(win, abs)) {
         void shell.openPath(abs)
       }
       return
@@ -552,7 +594,13 @@ async function persistWindowState(win: BrowserWindow): Promise<void> {
   }))
 }
 
-async function createWindow(): Promise<void> {
+interface CreateWindowOptions {
+  initialVaultRoot?: string | null
+  inheritWorkspaceFrom?: BrowserWindow | null
+  persistInitialVault?: boolean
+}
+
+async function createWindow(options: CreateWindowOptions = {}): Promise<BrowserWindow> {
   const createWindowStartedAt = performance.now()
   const mac = isMac()
   const cfg = await loadConfig()
@@ -574,7 +622,8 @@ async function createWindow(): Promise<void> {
           // BrowserWindow transparent forces macOS into an unnecessary
           // compositing path that makes typing feel mushy on large
           // displays. Use a solid background instead.
-          backgroundColor: MAC_WINDOW_BACKGROUND_COLOR
+          backgroundColor: MAC_WINDOW_BACKGROUND_COLOR,
+          tabbingIdentifier: MAIN_WINDOW_TABBING_IDENTIFIER
         }
       : {
           backgroundColor: '#faf7f0',
@@ -591,8 +640,10 @@ async function createWindow(): Promise<void> {
     }
   })
 
-  mainWindow = win
-  mainWindowReadyForAppEvents = false
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    mainWindow = win
+    mainWindowReadyForAppEvents = false
+  }
 
   let persistWindowStateTimer: ReturnType<typeof setTimeout> | null = null
   const scheduleWindowStatePersist = () => {
@@ -633,9 +684,12 @@ async function createWindow(): Promise<void> {
   win.on('close', flushWindowStatePersist)
   win.on('closed', () => {
     if (persistWindowStateTimer) clearTimeout(persistWindowStateTimer)
+    windowVaults.clearWindow(win.id)
     if (mainWindow === win) {
-      mainWindow = null
-      mainWindowReadyForAppEvents = false
+      mainWindow =
+        BrowserWindow.getAllWindows().find((candidate) => candidate.id !== win.id && !candidate.isDestroyed()) ??
+        null
+      mainWindowReadyForAppEvents = mainWindow != null
     }
   })
 
@@ -643,12 +697,27 @@ async function createWindow(): Promise<void> {
   installZoomControls(win)
   applyZoomFactor(win, currentZoomFactor)
 
+  if (options.inheritWorkspaceFrom && !options.inheritWorkspaceFrom.isDestroyed()) {
+    inheritWindowWorkspaceSession(options.inheritWorkspaceFrom, win)
+  } else if (options.initialVaultRoot) {
+    try {
+      await setVaultForWindow(win, options.initialVaultRoot, {
+        persist: options.persistInitialVault !== false
+      })
+    } catch (err) {
+      if (!win.isDestroyed()) win.destroy()
+      throw err
+    }
+  }
+
   const devServerUrl = process.env['ELECTRON_RENDERER_URL']
   if (devServerUrl) {
     void win.loadURL(devServerUrl)
   } else {
     void win.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
+
+  return win
 }
 
 async function ensureMainWindow(): Promise<void> {
@@ -662,10 +731,42 @@ async function ensureMainWindow(): Promise<void> {
   await creatingMainWindow
 }
 
-function currentRemoteWorkspaceInfo(): RemoteWorkspaceInfo | null {
+async function openVaultInNewWindow(parentWindow?: BrowserWindow | null): Promise<VaultInfo | null> {
+  const options: Electron.OpenDialogOptions = {
+    title: 'Open Vault in New Window',
+    properties: ['openDirectory', 'createDirectory'],
+    buttonLabel: 'Open Vault'
+  }
+  const result =
+    parentWindow && !parentWindow.isDestroyed()
+      ? await dialog.showOpenDialog(parentWindow, options)
+      : await dialog.showOpenDialog(options)
+  if (result.canceled || result.filePaths.length === 0) return null
+
+  const win = await createWindow({
+    initialVaultRoot: result.filePaths[0],
+    persistInitialVault: true
+  })
+  if (parentWindow && !parentWindow.isDestroyed()) {
+    win.moveTop()
+  }
+  return windowVaults.vaultForWindow(win.id)
+}
+
+async function currentRemoteWorkspaceInfo(): Promise<RemoteWorkspaceInfo | null> {
+  const win = currentIpcWindow()
+  const windowMode = win ? windowVaults.modeForWindow(win.id) : null
+  if (windowMode === 'local') return null
+  if (!remoteWorkspaceConfig) {
+    const cfg = await loadConfig()
+    if (cfg.workspaceMode !== 'remote' || !cfg.remoteWorkspace?.baseUrl) return null
+    remoteWorkspaceConfig = cfg.remoteWorkspace
+    currentRemoteWorkspaceProfileId = cfg.remoteWorkspaceProfileId
+  }
+  if (win && windowMode && windowMode !== 'remote') return null
   if (!remoteWorkspaceConfig) return null
   return {
-    mode: currentWorkspaceMode,
+    mode: 'remote',
     baseUrl: remoteWorkspaceConfig.baseUrl,
     authConfigured: Boolean(remoteWorkspaceClient?.authToken),
     capabilities: remoteServerCapabilities,
@@ -799,12 +900,6 @@ async function migrateLegacyRemoteWorkspaceSecrets(): Promise<void> {
   }))
 }
 
-function broadcastVaultChange(ev: VaultChangeEvent): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send(IPC.VAULT_ON_CHANGE, ev)
-  }
-}
-
 function stopRemoteWatch(): void {
   if (stopRemoteVaultWatch) {
     stopRemoteVaultWatch()
@@ -816,13 +911,46 @@ function startRemoteWatch(client: RemoteServerClient, capabilities: ServerCapabi
   stopRemoteWatch()
   if (!capabilities.supportsWatch) return
   stopRemoteVaultWatch = client.watchVaultChanges((ev) => {
-    broadcastVaultChange(ev)
+    windowVaults.sendRemoteVaultChange(ev)
   })
 }
 
-async function setVault(root: string): Promise<VaultInfo> {
+async function setVaultForWindow(
+  win: BrowserWindow,
+  root: string,
+  options: { persist?: boolean } = {}
+): Promise<VaultInfo> {
   await ensureVaultLayout(root)
-  currentVault = vaultInfo(root)
+  const vault = vaultInfo(path.resolve(root))
+  windowVaults.setLocalVault(win.id, vault)
+  currentVault = vault
+  currentWorkspaceMode = 'local'
+  if (!windowVaults.hasRemoteWindows()) {
+    remoteWorkspaceClient = null
+    remoteWorkspaceConfig = null
+    currentRemoteWorkspaceProfileId = null
+    remoteServerCapabilities = null
+    stopRemoteWatch()
+  }
+  if (options.persist !== false) {
+    await updateConfig((cfg) => ({
+      ...cfg,
+      workspaceMode: 'local',
+      vaultRoot: vault.root,
+      localVaults: rememberLocalVault(cfg.localVaults, vault),
+      remoteWorkspaceProfileId: null
+    }))
+  }
+  return vault
+}
+
+async function setVault(root: string): Promise<VaultInfo> {
+  const win = currentIpcWindow() ?? mainWindow
+  if (win && !win.isDestroyed()) return await setVaultForWindow(win, root)
+
+  await ensureVaultLayout(root)
+  const vault = vaultInfo(path.resolve(root))
+  currentVault = vault
   currentWorkspaceMode = 'local'
   remoteWorkspaceClient = null
   remoteWorkspaceConfig = null
@@ -832,15 +960,31 @@ async function setVault(root: string): Promise<VaultInfo> {
   await updateConfig((cfg) => ({
     ...cfg,
     workspaceMode: 'local',
-    vaultRoot: root,
+    vaultRoot: vault.root,
+    localVaults: rememberLocalVault(cfg.localVaults, vault),
     remoteWorkspaceProfileId: null
   }))
-  watcher.start(root, (ev: VaultChangeEvent) => {
-    invalidateNoteMetaCache(root, ev.scope === 'vault-settings' ? undefined : ev.path)
-    invalidateVaultTextSearchCache(root)
-    broadcastVaultChange(ev)
-  })
-  return currentVault
+  return vault
+}
+
+async function listLocalVaults(): Promise<LocalVaultEntry[]> {
+  const cfg = await loadConfig()
+  let entries = cfg.localVaults
+  if (cfg.vaultRoot && !entries.some((entry) => path.resolve(entry.root) === path.resolve(cfg.vaultRoot!))) {
+    try {
+      entries = rememberLocalVault(entries, vaultInfo(cfg.vaultRoot), 0)
+    } catch {
+      entries = [
+        {
+          root: path.resolve(cfg.vaultRoot),
+          name: path.basename(cfg.vaultRoot),
+          lastOpenedAt: 0
+        },
+        ...entries
+      ]
+    }
+  }
+  return entries
 }
 
 async function setRemoteWorkspace(
@@ -860,9 +1004,12 @@ async function setRemoteWorkspace(
     vault = await client.selectVaultPath(preferredVaultPath)
   }
 
-  watcher.stop()
+  const win = currentIpcWindow() ?? mainWindow
   currentWorkspaceMode = 'remote'
   currentVault = vault
+  if (win && !win.isDestroyed()) {
+    windowVaults.setRemoteVault(win.id, vault)
+  }
   remoteWorkspaceClient = client
   remoteServerCapabilities = capabilities
   currentRemoteWorkspaceProfileId = options.profileId ?? null
@@ -885,18 +1032,25 @@ async function setRemoteWorkspace(
 
 async function disconnectRemoteWorkspace(): Promise<VaultInfo | null> {
   const cfg = await loadConfig()
-  stopRemoteWatch()
-  remoteWorkspaceClient = null
-  remoteWorkspaceConfig = null
-  currentRemoteWorkspaceProfileId = null
-  remoteServerCapabilities = null
+  const win = currentIpcWindow() ?? mainWindow
   currentWorkspaceMode = 'local'
 
   if (cfg.vaultRoot) {
+    if (win && !win.isDestroyed()) {
+      return await setVaultForWindow(win, cfg.vaultRoot)
+    }
     return await setVault(cfg.vaultRoot)
   }
 
-  watcher.stop()
+  if (win && !win.isDestroyed()) {
+    windowVaults.clearWindow(win.id)
+  }
+  if (!windowVaults.hasRemoteWindows()) {
+    remoteWorkspaceClient = null
+    remoteWorkspaceConfig = null
+    currentRemoteWorkspaceProfileId = null
+    remoteServerCapabilities = null
+  }
   currentVault = null
   await updateConfig((current) => ({
     ...current,
@@ -904,6 +1058,17 @@ async function disconnectRemoteWorkspace(): Promise<VaultInfo | null> {
     remoteWorkspaceProfileId: null
   }))
   return null
+}
+
+function inheritWindowWorkspaceSession(source: BrowserWindow, target: BrowserWindow): void {
+  const vault = windowVaults.vaultForWindow(source.id)
+  const mode = windowVaults.modeForWindow(source.id)
+  if (!vault || !mode) return
+  if (mode === 'remote') {
+    windowVaults.setRemoteVault(target.id, vault)
+  } else {
+    windowVaults.setLocalVault(target.id, vault)
+  }
 }
 
 function noteTitleFromRelPath(relPath: string): string {
@@ -953,7 +1118,10 @@ async function exportNotePdf(
   relPath: string,
   parentWindow: BrowserWindow | null | undefined
 ): Promise<string | null> {
-  const current = currentVault ?? (isRemoteWorkspaceActive() ? await requireRemoteWorkspaceClient().getCurrentVault() : null)
+  const current =
+    parentWindow && !parentWindow.isDestroyed()
+      ? windowVaults.vaultForWindow(parentWindow.id)
+      : currentVault ?? (isRemoteWorkspaceActive() ? await requireRemoteWorkspaceClient().getCurrentVault() : null)
   if (!current) {
     throw new Error('No active vault is available for PDF export.')
   }
@@ -996,6 +1164,9 @@ async function exportNotePdf(
   })
 
   try {
+    if (parentWindow && !parentWindow.isDestroyed()) {
+      inheritWindowWorkspaceSession(parentWindow, exportWindow)
+    }
     installNavigationGuards(exportWindow)
     applyZoomFactor(exportWindow, currentZoomFactor)
     const params = `?exportNote=${encodeURIComponent(relPath)}`
@@ -1021,6 +1192,7 @@ async function exportNotePdf(
     await fsp.writeFile(targetPath, pdf)
     return targetPath
   } finally {
+    windowVaults.clearWindow(exportWindow.id)
     if (!exportWindow.isDestroyed()) {
       exportWindow.destroy()
     }
@@ -1170,7 +1342,13 @@ async function connectRemoteWorkspaceProfile(
 }
 
 async function loadCurrentVaultFromConfig(): Promise<VaultInfo | null> {
-  if (currentVault) return currentVault
+  const win = currentIpcWindow() ?? mainWindow
+  if (win && !win.isDestroyed()) {
+    const existing = windowVaults.vaultForWindow(win.id)
+    if (existing) return existing
+  } else if (currentVault) {
+    return currentVault
+  }
   const cfg = await loadConfig()
   remoteWorkspaceConfig = cfg.remoteWorkspace
   currentRemoteWorkspaceProfileId = cfg.remoteWorkspaceProfileId
@@ -1181,11 +1359,16 @@ async function loadCurrentVaultFromConfig(): Promise<VaultInfo | null> {
       cfg.remoteWorkspace.authToken ??
       null
     try {
-      const result = await setRemoteWorkspace(cfg.remoteWorkspace.baseUrl, authToken, {
-        persist: false,
-        profileId: remoteProfile?.id ?? cfg.remoteWorkspaceProfileId,
-        vaultPath: remoteProfile?.vaultPath ?? null
-      })
+      const loadRemote = async () =>
+        await setRemoteWorkspace(cfg.remoteWorkspace!.baseUrl, authToken, {
+          persist: false,
+          profileId: remoteProfile?.id ?? cfg.remoteWorkspaceProfileId,
+          vaultPath: remoteProfile?.vaultPath ?? null
+        })
+      const result =
+        win && !win.isDestroyed()
+          ? await ipcWindowContext.run(win, loadRemote)
+          : await loadRemote()
       return result.vault
     } catch {
       currentRemoteWorkspaceProfileId = null
@@ -1194,6 +1377,9 @@ async function loadCurrentVaultFromConfig(): Promise<VaultInfo | null> {
   }
   if (cfg.vaultRoot) {
     try {
+      if (win && !win.isDestroyed()) {
+        return await setVaultForWindow(win, cfg.vaultRoot, { persist: false })
+      }
       return await setVault(cfg.vaultRoot)
     } catch {
       return null
@@ -1203,12 +1389,16 @@ async function loadCurrentVaultFromConfig(): Promise<VaultInfo | null> {
 }
 
 function requireVault(): VaultInfo {
-  if (!currentVault) throw new Error('No vault is open')
-  return currentVault
+  const win = currentIpcWindow()
+  const vault = win ? windowVaults.vaultForWindow(win.id) : currentVault
+  if (!vault) throw new Error('No vault is open')
+  return vault
 }
 
 function isRemoteWorkspaceActive(): boolean {
-  return currentWorkspaceMode === 'remote' && remoteWorkspaceClient != null
+  const win = currentIpcWindow()
+  if (win && !windowVaults.isRemoteWindow(win.id)) return false
+  return remoteWorkspaceClient != null && (win ? true : currentWorkspaceMode === 'remote')
 }
 
 function requireRemoteWorkspaceClient(): RemoteServerClient {
@@ -1365,7 +1555,8 @@ function registerIpc(): void {
   ): void => {
     ipcMain.handle(channel, async (event, ...args) => {
       assertTrustedIpcEvent(event)
-      return await listener(event, ...(args as Args))
+      const win = requireEventWindow(event)
+      return await ipcWindowContext.run(win, async () => await listener(event, ...(args as Args)))
     })
   }
 
@@ -1375,7 +1566,8 @@ function registerIpc(): void {
   ): void => {
     ipcMain.on(channel, (event, ...args) => {
       assertTrustedIpcEvent(event)
-      listener(event, ...(args as Args))
+      const win = requireEventWindow(event)
+      ipcWindowContext.run(win, () => listener(event, ...(args as Args)))
     })
   }
 
@@ -1443,12 +1635,24 @@ function registerIpc(): void {
     return await loadCurrentVaultFromConfig()
   })
 
-  handle(IPC.VAULT_PICK, async () => {
-    const result = await dialog.showOpenDialog({
+  handle(IPC.VAULT_LIST_LOCAL, async () => {
+    return await listLocalVaults()
+  })
+
+  handle(IPC.VAULT_OPEN_LOCAL, async (_event, root: string) => {
+    const trimmed = typeof root === 'string' ? root.trim() : ''
+    if (!trimmed) return null
+    return await setVault(trimmed)
+  })
+
+  handle(IPC.VAULT_PICK, async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const options: Electron.OpenDialogOptions = {
       title: 'Choose a vault folder',
       properties: ['openDirectory', 'createDirectory'],
       buttonLabel: 'Open Vault'
-    })
+    }
+    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
     if (result.canceled || result.filePaths.length === 0) return null
     return await setVault(result.filePaths[0])
   })
@@ -1843,6 +2047,10 @@ function registerIpc(): void {
     openFloatingNoteWindow(relPath)
   })
 
+  handle(IPC.WINDOW_OPEN_VAULT, async (event) => {
+    return await openVaultInNewWindow(BrowserWindow.fromWebContents(event.sender))
+  })
+
   handle(IPC.WINDOW_TOGGLE_QUICK_CAPTURE, async () => {
     toggleQuickCaptureWindow()
   })
@@ -1909,7 +2117,11 @@ function registerIpc(): void {
 const floatingNoteWindows = new Map<string, BrowserWindow>()
 function openFloatingNoteWindow(relPath: string): void {
   const floatingWindowStartedAt = performance.now()
-  const existing = floatingNoteWindows.get(relPath)
+  const sourceWindow = currentIpcWindow() ?? mainWindow
+  const sourceVault =
+    sourceWindow && !sourceWindow.isDestroyed() ? windowVaults.vaultForWindow(sourceWindow.id) : currentVault
+  const floatingKey = `${sourceVault?.root ?? 'no-vault'}:${relPath}`
+  const existing = floatingNoteWindows.get(floatingKey)
   if (existing && !existing.isDestroyed()) {
     if (existing.isMinimized()) existing.restore()
     existing.focus()
@@ -1944,9 +2156,10 @@ function openFloatingNoteWindow(relPath: string): void {
     }
   })
 
-  floatingNoteWindows.set(relPath, win)
+  floatingNoteWindows.set(floatingKey, win)
   win.on('closed', () => {
-    floatingNoteWindows.delete(relPath)
+    floatingNoteWindows.delete(floatingKey)
+    windowVaults.clearWindow(win.id)
   })
   win.on('ready-to-show', () => {
     recordMainPerf('main.floating-window.ready-to-show', performance.now() - floatingWindowStartedAt, {
@@ -1964,6 +2177,9 @@ function openFloatingNoteWindow(relPath: string): void {
   installNavigationGuards(win)
   installZoomControls(win)
   applyZoomFactor(win, currentZoomFactor)
+  if (sourceWindow && !sourceWindow.isDestroyed()) {
+    inheritWindowWorkspaceSession(sourceWindow, win)
+  }
 
   const params = `?floating=1&note=${encodeURIComponent(relPath)}`
   const devServerUrl = process.env['ELECTRON_RENDERER_URL']
@@ -1989,6 +2205,7 @@ let registeredQuickCaptureHotkey: string | null = null
 function ensureQuickCaptureWindow(): BrowserWindow {
   if (quickCaptureWindow && !quickCaptureWindow.isDestroyed()) return quickCaptureWindow
   const mac = isMac()
+  const sourceWindow = BrowserWindow.getFocusedWindow() ?? mainWindow
   const win = new BrowserWindow({
     width: 620,
     height: 340,
@@ -2026,6 +2243,7 @@ function ensureQuickCaptureWindow(): BrowserWindow {
   })
   win.on('closed', () => {
     if (quickCaptureWindow === win) quickCaptureWindow = null
+    windowVaults.clearWindow(win.id)
   })
   win.on('blur', () => {
     // Focus-out hides the panel so the user's flow snaps back to whatever
@@ -2036,6 +2254,9 @@ function ensureQuickCaptureWindow(): BrowserWindow {
   installNavigationGuards(win)
   installZoomControls(win)
   applyZoomFactor(win, currentZoomFactor)
+  if (sourceWindow && !sourceWindow.isDestroyed()) {
+    inheritWindowWorkspaceSession(sourceWindow, win)
+  }
 
   const params = '?quickCapture=1'
   const devServerUrl = process.env['ELECTRON_RENDERER_URL']
@@ -2053,6 +2274,10 @@ function ensureQuickCaptureWindow(): BrowserWindow {
 
 function showQuickCaptureWindow(): void {
   const win = ensureQuickCaptureWindow()
+  const sourceWindow = BrowserWindow.getFocusedWindow() ?? mainWindow
+  if (sourceWindow && sourceWindow.id !== win.id && !sourceWindow.isDestroyed()) {
+    inheritWindowWorkspaceSession(sourceWindow, win)
+  }
   win.show()
   win.focus()
 }
@@ -2128,7 +2353,8 @@ function installAppMenu(): void {
           label: 'Settings…',
           accelerator: 'CmdOrCtrl+,',
           click: () => {
-            mainWindow?.webContents.send(IPC.APP_OPEN_SETTINGS)
+            const target = BrowserWindow.getFocusedWindow() ?? mainWindow
+            target?.webContents.send(IPC.APP_OPEN_SETTINGS)
           }
         },
         { type: 'separator' },
@@ -2139,6 +2365,18 @@ function installAppMenu(): void {
         { role: 'unhide' },
         { type: 'separator' },
         { role: 'quit', label: 'Quit ZenNotes' }
+      ]
+    },
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: 'Open Vault in New Window…',
+          accelerator: 'CmdOrCtrl+Shift+O',
+          click: () => {
+            void openVaultInNewWindow(BrowserWindow.getFocusedWindow() ?? mainWindow)
+          }
+        }
       ]
     },
     {
@@ -2193,6 +2431,11 @@ function installAppMenu(): void {
       submenu: [
         { role: 'minimize' },
         { role: 'zoom' },
+        { type: 'separator' },
+        { role: 'toggleTabBar' },
+        { role: 'selectNextTab' },
+        { role: 'selectPreviousTab' },
+        { role: 'mergeAllWindows' },
         { type: 'separator' },
         { role: 'front' }
       ]
@@ -2332,7 +2575,7 @@ app.whenReady().then(async () => {
     }
 
     const abs = decodeLocalAssetRequestPath(request.url)
-    if (!abs || !isPathInsideVault(abs)) {
+    if (!abs || !windowVaults.isPathInsideOpenLocalVault(abs)) {
       throw new Error(`Invalid local asset URL: ${request.url}`)
     }
     const data = await fsp.readFile(abs)
@@ -2388,6 +2631,14 @@ app.whenReady().then(async () => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) void ensureMainWindow()
   })
+
+  app.on('new-window-for-tab', () => {
+    const sourceWindow = BrowserWindow.getFocusedWindow() ?? mainWindow
+    void createWindow({
+      inheritWorkspaceFrom: sourceWindow,
+      persistInitialVault: false
+    })
+  })
 })
 
 app.on('open-url', (event, url) => {
@@ -2398,12 +2649,14 @@ app.on('open-url', (event, url) => {
 })
 
 app.on('window-all-closed', () => {
-  watcher.stop()
+  windowVaults.stopAll()
+  stopRemoteWatch()
   if (!isMac()) app.quit()
 })
 
 app.on('before-quit', () => {
-  watcher.stop()
+  windowVaults.stopAll()
+  stopRemoteWatch()
   quickCaptureQuitting = true
   unregisterQuickCaptureHotkey()
 })

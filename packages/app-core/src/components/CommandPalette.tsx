@@ -1,10 +1,7 @@
 /**
- * Cmd+Shift+P command palette with a nested sub-mode for theme
- * selection. When the user picks "Themes…" the palette stays open but
- * swaps its list to show every theme variant. Arrowing / hovering
- * over a row applies the theme immediately (live preview); Enter
- * commits, Escape reverts to whatever was active when the picker
- * opened and closes.
+ * Cmd+Shift+P command palette with nested picker modes for themes and
+ * vault switching. Theme rows live-preview while vault rows switch
+ * workspaces only when explicitly selected.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
@@ -12,8 +9,12 @@ import { buildCommands, type Command } from '../lib/commands'
 import { rankItems } from '../lib/fuzzy-score'
 import { isPaletteNextKey, isPalettePreviousKey } from '../lib/palette-nav'
 import { THEMES, type ThemeFamily, type ThemeMode, type ThemeOption } from '../lib/themes'
+import {
+  buildVaultSwitcherEntries,
+  type VaultSwitcherEntry
+} from '../lib/vault-switcher'
 
-type Mode = 'main' | 'theme'
+type Mode = 'main' | 'theme' | 'vault'
 
 interface ThemeSnapshot {
   id: string
@@ -24,8 +25,21 @@ interface ThemeSnapshot {
 export function CommandPalette(): JSX.Element {
   const setOpen = useStore((s) => s.setCommandPaletteOpen)
   const setTheme = useStore((s) => s.setTheme)
+  const localVaults = useStore((s) => s.localVaults)
+  const remoteWorkspaceProfiles = useStore((s) => s.remoteWorkspaceProfiles)
+  const currentVault = useStore((s) => s.vault)
+  const workspaceMode = useStore((s) => s.workspaceMode)
+  const remoteWorkspaceInfo = useStore((s) => s.remoteWorkspaceInfo)
+  const initialMode = useStore((s) => s.commandPaletteInitialMode)
+  const refreshLocalVaults = useStore((s) => s.refreshLocalVaults)
+  const refreshRemoteWorkspaceProfiles = useStore((s) => s.refreshRemoteWorkspaceProfiles)
+  const openLocalVault = useStore((s) => s.openLocalVault)
+  const connectRemoteWorkspaceProfile = useStore((s) => s.connectRemoteWorkspaceProfile)
+  const supportsRemoteWorkspace =
+    window.zen.getAppInfo().runtime === 'desktop' &&
+    window.zen.getCapabilities().supportsRemoteWorkspace
 
-  const [mode, setMode] = useState<Mode>('main')
+  const [mode, setMode] = useState<Mode>(initialMode)
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -58,25 +72,60 @@ export function CommandPalette(): JSX.Element {
     [query]
   )
 
-  const resultsLength = mode === 'main' ? commandResults.length : themeResults.length
+  const vaultOptions = useMemo<VaultSwitcherEntry[]>(
+    () =>
+      buildVaultSwitcherEntries({
+        localVaults,
+        remoteProfiles: remoteWorkspaceProfiles,
+        currentVault,
+        workspaceMode,
+        remoteWorkspaceInfo
+      }),
+    [currentVault, localVaults, remoteWorkspaceInfo, remoteWorkspaceProfiles, workspaceMode]
+  )
+
+  const vaultResults = useMemo<VaultSwitcherEntry[]>(
+    () =>
+      rankItems(vaultOptions, query, [
+        { get: (v) => v.name, weight: 1 },
+        { get: (v) => v.location, weight: 0.7 },
+        { get: (v) => v.kind, weight: 0.4 }
+      ]),
+    [query, vaultOptions]
+  )
+
+  const resultsLength =
+    mode === 'main'
+      ? commandResults.length
+      : mode === 'theme'
+        ? themeResults.length
+        : vaultResults.length
 
   useEffect(() => {
     inputRef.current?.focus()
-  }, [])
+    if (initialMode === 'vault') {
+      void refreshLocalVaults()
+      if (supportsRemoteWorkspace) void refreshRemoteWorkspaceProfiles()
+    }
+  }, [initialMode, refreshLocalVaults, refreshRemoteWorkspaceProfiles, supportsRemoteWorkspace])
   // Selection sync:
   //  - Main mode: start at the top of the results on every query change.
   //  - Theme mode: keep the currently-applied theme highlighted as the
   //    filter narrows. If it's filtered out, leave active at -1 (no
   //    row highlighted, no preview churn) until the user arrows.
   useEffect(() => {
-    if (mode !== 'theme') {
+    if (mode === 'main') {
       setActive(0)
+      return
+    }
+    if (mode === 'vault') {
+      setActive(vaultResults.length > 0 ? 0 : -1)
       return
     }
     const currentId = useStore.getState().themeId
     const idx = themeResults.findIndex((t) => t.id === currentId)
     setActive(idx)
-  }, [query, mode, themeResults])
+  }, [query, mode, themeResults, vaultResults.length])
 
   // Keep the active row in view.
   useEffect(() => {
@@ -113,6 +162,23 @@ export function CommandPalette(): JSX.Element {
     // the currently-applied theme, so no setActive needed here.
   }
 
+  const enterVaultMode = (): void => {
+    setMode('vault')
+    setQuery('')
+    setActive(0)
+    void refreshLocalVaults()
+    if (supportsRemoteWorkspace) void refreshRemoteWorkspaceProfiles()
+    inputRef.current?.focus()
+  }
+
+  const returnToMain = (): void => {
+    if (mode === 'theme') revertTheme()
+    setMode('main')
+    setQuery('')
+    setActive(0)
+    inputRef.current?.focus()
+  }
+
   const revertTheme = (): void => {
     const snap = originalThemeRef.current
     if (!snap) return
@@ -134,6 +200,10 @@ export function CommandPalette(): JSX.Element {
       inputRef.current?.focus()
       return
     }
+    if (cmd.id === 'app.vault.switch') {
+      enterVaultMode()
+      return
+    }
     setOpen(false)
     try {
       await cmd.run()
@@ -148,6 +218,23 @@ export function CommandPalette(): JSX.Element {
     setOpen(false)
   }
 
+  const switchVault = async (entry: VaultSwitcherEntry): Promise<void> => {
+    setOpen(false)
+    if (entry.current) return
+    if (entry.kind === 'local') {
+      await openLocalVault(entry.root)
+      return
+    }
+    if (entry.id) await connectRemoteWorkspaceProfile(entry.id)
+  }
+
+  const inputPlaceholder =
+    mode === 'main'
+      ? 'Type a command…'
+      : mode === 'theme'
+        ? 'Pick a color theme'
+        : 'Pick a vault'
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 pt-[12vh] backdrop-blur-sm"
@@ -157,31 +244,29 @@ export function CommandPalette(): JSX.Element {
         className="w-[min(640px,92vw)] overflow-hidden rounded-xl bg-paper-100 shadow-float ring-1 ring-paper-300/70"
         onClick={(e) => e.stopPropagation()}
       >
-        {mode === 'theme' && (
+        {mode !== 'main' && (
           <div className="flex items-center gap-2 border-b border-paper-300/70 bg-paper-200/40 px-4 py-2 text-[11px] text-ink-500">
             <button
               type="button"
-              onClick={() => {
-                revertTheme()
-                setMode('main')
-                setQuery('')
-                setActive(0)
-                inputRef.current?.focus()
-              }}
+              onClick={returnToMain}
               className="rounded px-1 py-0.5 text-ink-600 transition-colors hover:bg-paper-200 hover:text-ink-900"
               aria-label="Back to commands"
               title="Back to commands"
             >
               ‹ Back
             </button>
-            <span className="uppercase tracking-wide">Theme preview — ↵ to keep, esc to revert</span>
+            <span className="uppercase tracking-wide">
+              {mode === 'theme'
+                ? 'Theme preview — ↵ to keep, esc to revert'
+                : 'Switch vault — ↵ to open, esc to return'}
+            </span>
           </div>
         )}
         <div className="border-b border-paper-300/70 px-4 py-3">
           <input
             ref={inputRef}
             value={query}
-            placeholder={mode === 'main' ? 'Type a command…' : 'Pick a color theme'}
+            placeholder={inputPlaceholder}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
               if (isPaletteNextKey(e)) {
@@ -195,17 +280,17 @@ export function CommandPalette(): JSX.Element {
                 if (mode === 'main') {
                   const cmd = commandResults[active]
                   if (cmd) void runCommand(cmd)
-                } else {
+                } else if (mode === 'theme') {
                   const theme = themeResults[active]
                   if (theme) commitTheme(theme)
+                } else {
+                  const vault = vaultResults[active]
+                  if (vault) void switchVault(vault)
                 }
               } else if (e.key === 'Escape') {
                 e.preventDefault()
-                if (mode === 'theme') {
-                  revertTheme()
-                  setMode('main')
-                  setQuery('')
-                  setActive(0)
+                if (mode !== 'main') {
+                  returnToMain()
                   return
                 }
                 closePalette()
@@ -220,7 +305,11 @@ export function CommandPalette(): JSX.Element {
         >
           {resultsLength === 0 ? (
             <div className="px-4 py-6 text-center text-sm text-ink-400">
-              {mode === 'main' ? 'No matching commands.' : 'No matching themes.'}
+              {mode === 'main'
+                ? 'No matching commands.'
+                : mode === 'theme'
+                  ? 'No matching themes.'
+                  : 'No vaults.'}
             </div>
           ) : mode === 'main' ? (
             commandResults.map((cmd, i) => (
@@ -247,7 +336,7 @@ export function CommandPalette(): JSX.Element {
                 )}
               </button>
             ))
-          ) : (
+          ) : mode === 'theme' ? (
             themeResults.map((theme, i) => {
               const isOriginal = theme.id === originalThemeRef.current?.id
               const familyTitle =
@@ -283,6 +372,34 @@ export function CommandPalette(): JSX.Element {
                 </button>
               )
             })
+          ) : (
+            vaultResults.map((entry, i) => (
+              <button
+                key={`${entry.kind}-${entry.kind === 'local' ? entry.root : entry.id ?? entry.location}`}
+                data-cmd-idx={i}
+                onClick={() => void switchVault(entry)}
+                onMouseMove={() => setActive(i)}
+                className={[
+                  'flex w-full min-w-0 items-center gap-3 px-4 py-2 text-left',
+                  i === active ? 'bg-paper-200' : 'hover:bg-paper-200/70'
+                ].join(' ')}
+              >
+                <span className="shrink-0 text-[11px] uppercase tracking-wide text-ink-400">
+                  {entry.kind === 'local' ? 'Local' : 'Remote'}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-sm text-ink-900">
+                  {entry.name}
+                </span>
+                <span className="min-w-0 max-w-[45%] truncate text-[11px] text-ink-400">
+                  {entry.location}
+                </span>
+                {entry.current && (
+                  <span className="shrink-0 text-[11px] text-accent">
+                    current
+                  </span>
+                )}
+              </button>
+            ))
           )}
         </div>
         <div className="flex items-center justify-end gap-4 border-t border-paper-300/70 bg-paper-100 px-4 py-2 text-[11px] text-ink-500">
@@ -292,11 +409,11 @@ export function CommandPalette(): JSX.Element {
           </span>
           <span>
             <kbd className="rounded bg-paper-200 px-1">↵</kbd>{' '}
-            {mode === 'main' ? 'run' : 'keep theme'}
+            {mode === 'main' ? 'run' : mode === 'theme' ? 'keep theme' : 'switch'}
           </span>
           <span>
             <kbd className="rounded bg-paper-200 px-1">esc</kbd>{' '}
-            {mode === 'main' ? 'close' : 'revert'}
+            {mode === 'main' ? 'close' : mode === 'theme' ? 'revert' : 'back'}
           </span>
         </div>
       </div>

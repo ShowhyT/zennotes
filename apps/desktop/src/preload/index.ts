@@ -14,6 +14,7 @@ import type {
   DirectoryBrowseResult,
   FolderEntry,
   ImportedAsset,
+  LocalVaultEntry,
   ListNotesPageRequest,
   ListNotesPageResponse,
   NoteComment,
@@ -222,6 +223,14 @@ const api: ZenBridge = {
     await refreshRemoteWorkspaceInfo()
     return vault
   },
+  listLocalVaults: async (): Promise<LocalVaultEntry[]> => {
+    return await ipcRenderer.invoke(IPC.VAULT_LIST_LOCAL)
+  },
+  openLocalVault: async (root: string): Promise<VaultInfo | null> => {
+    const vault = await ipcRenderer.invoke(IPC.VAULT_OPEN_LOCAL, root)
+    await refreshRemoteWorkspaceInfo()
+    return vault
+  },
   pickVault: async (): Promise<VaultInfo | null> => {
     const vault = await ipcRenderer.invoke(IPC.VAULT_PICK)
     await refreshRemoteWorkspaceInfo()
@@ -371,6 +380,11 @@ const api: ZenBridge = {
   windowToggleMaximize: (): void => ipcRenderer.send(IPC.WINDOW_TOGGLE_MAXIMIZE),
   windowClose: (): void => ipcRenderer.send(IPC.WINDOW_CLOSE),
   openNoteWindow: (relPath: string): Promise<void> => ipcRenderer.invoke(IPC.WINDOW_OPEN_NOTE, relPath),
+  openVaultWindow: async (): Promise<VaultInfo | null> => {
+    const vault = await ipcRenderer.invoke(IPC.WINDOW_OPEN_VAULT)
+    await refreshRemoteWorkspaceInfo()
+    return vault
+  },
   toggleQuickCapture: (): Promise<void> =>
     ipcRenderer.invoke(IPC.WINDOW_TOGGLE_QUICK_CAPTURE),
   getQuickCaptureHotkey: (): Promise<string> =>

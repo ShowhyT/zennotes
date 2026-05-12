@@ -1196,6 +1196,31 @@ export function buildCommands(options?: { includeUnavailable?: boolean }): Comma
       run: () => getState().openVaultPicker()
     },
     {
+      id: 'app.vault.openWindow',
+      title: 'Open Local Vault in New Window…',
+      category: 'Vault',
+      keywords: 'vault local open folder workspace window tab multiple',
+      when: () =>
+        window.zen.getAppInfo().runtime === 'desktop' &&
+        window.zen.getCapabilities().supportsLocalFilesystemPickers,
+      run: async () => {
+        await window.zen.openVaultWindow()
+      }
+    },
+    {
+      id: 'app.vault.switch',
+      title: 'Switch Vault…',
+      category: 'Vault',
+      keywords: 'vault local remote switch workspace recent picker server',
+      when: () =>
+        window.zen.getAppInfo().runtime === 'desktop' &&
+        (window.zen.getCapabilities().supportsLocalFilesystemPickers ||
+          window.zen.getCapabilities().supportsRemoteWorkspace),
+      run: () => {
+        /* handled by CommandPalette */
+      }
+    },
+    {
       id: 'app.workspace.remote',
       title: 'Connect to Remote Vault…',
       category: 'Vault',

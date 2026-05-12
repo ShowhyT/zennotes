@@ -34,6 +34,7 @@ export type KeymapId =
   | "vim.leaderSearchVaultText"
   | "vim.leaderToggleSidebar"
   | "vim.leaderNoteOutline"
+  | "vim.leaderSwitchVault"
   | "vim.leaderNoteActions"
   | "vim.leaderFormatNote"
   | "vim.leaderQuickCapture"
@@ -324,6 +325,17 @@ const KEYMAP_DEFINITIONS: KeymapDefinition[] = [
     title: "Leader: note outline",
     description: "Open the note outline palette.",
     defaultBinding: "p",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderSwitchVault",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Leader: switch vault",
+    description: "Open the command palette vault switcher.",
+    defaultBinding: "v",
     vimOnly: true,
     maxTokens: 1,
   },

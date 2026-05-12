@@ -277,6 +277,7 @@ export const HELP_SHORTCUT_SECTIONS: HelpShortcutSection[] = [
       { keys: 'Space s t', action: 'Search vault text', detail: 'Fuzzy-search matching text lines across notes in Inbox, Quick Notes, and Archive.' },
       { keys: 'Space e', action: 'Toggle left sidebar', detail: 'Show or hide the folder/tag sidebar without touching the mouse.' },
       { keys: 'Space p', action: 'Note outline', detail: 'Jump to any heading in the active note via a searchable overlay.' },
+      { keys: 'Space v', action: 'Switch vault', detail: 'Open the command palette directly to the local vault switcher.' },
       { keys: 'Space, then pause', action: 'Show leader hints', detail: 'If enabled in Settings, open a which-key style guide for the next available leader actions. Sticky mode keeps it open until `Space` or `Esc`.' },
       { keys: 'Mod+3', action: 'Toggle outline panel', detail: 'Show or hide the persistent outline in the active pane.' },
       { keys: 'zc / zo', action: 'Fold / unfold heading', detail: 'Collapse or expand the section below the heading at the cursor.' },
@@ -512,6 +513,11 @@ export const HELP_VIM_COMMANDS: HelpExCommand[] = [
     command: '<Space> p',
     summary: 'Leader note outline',
     detail: 'Open a searchable list of every heading in the active note; Enter jumps the editor to that line.'
+  },
+  {
+    command: '<Space> v',
+    summary: 'Leader vault switcher',
+    detail: 'Open the command palette directly to the local vault switcher.'
   },
   {
     command: ':outline',

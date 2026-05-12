@@ -9,6 +9,8 @@ export const IPC = {
   WORKSPACE_SAVE_REMOTE_PROFILE: 'workspace:save-remote-profile',
   WORKSPACE_DELETE_REMOTE_PROFILE: 'workspace:delete-remote-profile',
   WORKSPACE_CONNECT_REMOTE_PROFILE: 'workspace:connect-remote-profile',
+  VAULT_LIST_LOCAL: 'vault:list-local',
+  VAULT_OPEN_LOCAL: 'vault:open-local',
   VAULT_PICK: 'vault:pick',
   VAULT_SELECT_PATH: 'vault:select-path',
   VAULT_BROWSE_SERVER_DIRECTORIES: 'vault:browse-server-directories',
@@ -69,6 +71,7 @@ export const IPC = {
   WINDOW_MINIMIZE: 'window:minimize',
   WINDOW_CLOSE: 'window:close',
   WINDOW_OPEN_NOTE: 'window:open-note',
+  WINDOW_OPEN_VAULT: 'window:open-vault',
   WINDOW_TOGGLE_QUICK_CAPTURE: 'window:toggle-quick-capture',
   APP_PLATFORM: 'app:platform',
   APP_GET_QUICK_CAPTURE_HOTKEY: 'app:get-quick-capture-hotkey',
@@ -366,6 +369,10 @@ export interface ImportedAsset {
 export interface VaultInfo {
   root: string
   name: string
+}
+
+export interface LocalVaultEntry extends VaultInfo {
+  lastOpenedAt: number
 }
 
 export interface ServerCapabilities {

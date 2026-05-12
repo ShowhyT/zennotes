@@ -42,6 +42,14 @@ function installZen(overrides: Record<string, unknown> = {}): void {
     value: {
       scanTasks: vi.fn().mockResolvedValue([]),
       scanTasksForPath: vi.fn().mockResolvedValue([]),
+      getCapabilities: vi.fn().mockReturnValue({
+        supportsUpdater: false,
+        supportsNativeMenus: false,
+        supportsFloatingWindows: false,
+        supportsLocalFilesystemPickers: true,
+        supportsRemoteWorkspace: false,
+        supportsCliInstall: false
+      }),
       listNotes: vi.fn().mockResolvedValue([makeNote('- [ ] old task')]),
       listFolders: vi.fn().mockResolvedValue([]),
       listAssets: vi.fn().mockResolvedValue([]),
@@ -105,5 +113,53 @@ describe('tasks cache freshness', () => {
 
     expect(scanTasksForPath).toHaveBeenCalledWith('inbox/Note.md')
     expect(useStore.getState().vaultTasks).toEqual(freshTasks)
+  })
+})
+
+describe('local vault shortcuts', () => {
+  it('stores known local vaults for the sidebar switcher', async () => {
+    const localVaults = [
+      { root: '/Users/test/Notes', name: 'Notes', lastOpenedAt: 2 },
+      { root: '/Users/test/Work', name: 'Work', lastOpenedAt: 1 }
+    ]
+    const listLocalVaults = vi.fn().mockResolvedValue(localVaults)
+    installZen({ listLocalVaults })
+
+    const { useStore } = await loadStore()
+    await useStore.getState().refreshLocalVaults()
+
+    expect(listLocalVaults).toHaveBeenCalledTimes(1)
+    expect(useStore.getState().localVaults).toEqual(localVaults)
+  })
+
+  it('loads asset files during local vault switches', async () => {
+    const assetFiles = [
+      {
+        path: 'assets/photo.png',
+        name: 'photo.png',
+        kind: 'image' as const,
+        siblingOrder: 0,
+        size: 42,
+        updatedAt: 1
+      }
+    ]
+    const listAssets = vi.fn().mockResolvedValue(assetFiles)
+    installZen({
+      openLocalVault: vi.fn().mockResolvedValue({ root: '/Users/test/Work', name: 'Work' }),
+      getRemoteWorkspaceInfo: vi.fn().mockResolvedValue(null),
+      getVaultSettings: vi.fn().mockResolvedValue({}),
+      listLocalVaults: vi.fn().mockResolvedValue([]),
+      listAssets,
+      hasAssetsDir: vi.fn().mockResolvedValue(true)
+    })
+
+    const { useStore } = await loadStore()
+    useStore.setState({ vault: { root: '/Users/test/Notes', name: 'Notes' } })
+
+    await useStore.getState().openLocalVault('/Users/test/Work')
+
+    expect(listAssets).toHaveBeenCalledTimes(1)
+    expect(useStore.getState().assetFiles).toEqual(assetFiles)
+    expect(useStore.getState().hasAssetsDir).toBe(true)
   })
 })

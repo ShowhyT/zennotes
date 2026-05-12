@@ -76,6 +76,7 @@ function resolveShortcutKeys(
     if (action === 'Search vault text') return leaderShortcut(overrides, 'vim.leaderSearchVaultText')
     if (action === 'Toggle left sidebar') return leaderShortcut(overrides, 'vim.leaderToggleSidebar')
     if (action === 'Note outline') return leaderShortcut(overrides, 'vim.leaderNoteOutline')
+    if (action === 'Switch vault') return leaderShortcut(overrides, 'vim.leaderSwitchVault')
     if (action === 'Show leader hints') return `${shortcut(overrides, 'vim.leaderPrefix')}, then pause`
     if (action === 'Toggle outline panel') return shortcut(overrides, 'global.toggleOutlinePanel')
     if (action === 'Fold / unfold heading') {
@@ -134,6 +135,7 @@ function resolveVimCommandLabel(command: string, overrides: KeymapOverrides): st
   if (command === '<Space> s t') return leaderShortcut(overrides, 'vim.leaderSearchVaultText')
   if (command === '<Space> e') return leaderShortcut(overrides, 'vim.leaderToggleSidebar')
   if (command === '<Space> p') return leaderShortcut(overrides, 'vim.leaderNoteOutline')
+  if (command === '<Space> v') return leaderShortcut(overrides, 'vim.leaderSwitchVault')
   return command
 }
 

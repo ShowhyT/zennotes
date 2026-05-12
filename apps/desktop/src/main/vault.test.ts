@@ -10,6 +10,7 @@ import {
   invalidateNoteMetaCache,
   listNotes,
   listFolders,
+  rememberLocalVault,
   renameFolder,
   searchVaultText,
   searchVaultTextCapabilities,
@@ -46,6 +47,27 @@ describe('absolutePath', () => {
     await mkdir(path.join(root, 'inbox'), { recursive: true })
 
     expect(absolutePath(root, 'inbox/note.md')).toBe(path.join(root, 'inbox', 'note.md'))
+  })
+})
+
+describe('rememberLocalVault', () => {
+  it('moves an opened vault to the top and deduplicates by root', () => {
+    const firstRoot = path.resolve('/tmp/zennotes-first')
+    const secondRoot = path.resolve('/tmp/zennotes-second')
+
+    const remembered = rememberLocalVault(
+      [
+        { root: firstRoot, name: 'First', lastOpenedAt: 10 },
+        { root: secondRoot, name: 'Second', lastOpenedAt: 20 }
+      ],
+      { root: firstRoot, name: 'First renamed' },
+      30
+    )
+
+    expect(remembered).toEqual([
+      { root: firstRoot, name: 'First renamed', lastOpenedAt: 30 },
+      { root: secondRoot, name: 'Second', lastOpenedAt: 20 }
+    ])
   })
 })
 

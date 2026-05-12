@@ -115,6 +115,10 @@ export function VimNav(): JSX.Element | null {
   const whichKeyHintTimeoutMs = useStore((s) => s.whichKeyHintTimeoutMs)
   const whichKeyHintsEnabled = vimMode && whichKeyHintsPref
   const stickyWhichKeyHints = whichKeyHintsEnabled && whichKeyHintMode === 'sticky'
+  const canSwitchVaults =
+    window.zen.getAppInfo().runtime === 'desktop' &&
+    (window.zen.getCapabilities().supportsLocalFilesystemPickers ||
+      window.zen.getCapabilities().supportsRemoteWorkspace)
   const resetLeader = useCallback(() => {
     leaderPending.current = null
     if (leaderTimer.current) clearTimeout(leaderTimer.current)
@@ -175,6 +179,15 @@ export function VimNav(): JSX.Element | null {
         label: 'Note outline',
         detail: 'Jump to any heading in the active note.'
       },
+      ...(canSwitchVaults
+        ? [
+            {
+              keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderSwitchVault'),
+              label: 'Switch vault',
+              detail: 'Open the command palette vault switcher for local and remote vaults.'
+            }
+          ]
+        : []),
       {
         keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderQuickCapture'),
         label: 'Quick capture',
@@ -506,6 +519,13 @@ export function VimNav(): JSX.Element | null {
           e.stopImmediatePropagation()
           resetLeader()
           state.setOutlinePaletteOpen(true)
+          return
+        }
+        if (canSwitchVaults && matchesSequenceToken(e, overrides, 'vim.leaderSwitchVault')) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          state.setCommandPaletteOpen(true, 'vault')
           return
         }
         if (matchesSequenceToken(e, overrides, 'vim.leaderNoteActions') && editorNormalMode) {
@@ -1560,6 +1580,8 @@ export function VimNav(): JSX.Element | null {
     } else if (itemType === 'tag') {
       const tag = el.dataset.sidebarTag
       if (tag) void state.openTagView(tag)
+    } else if (itemType === 'vault') {
+      openContextMenuForIndexedElement(el)
     } else if (itemType === 'tasks') {
       // Tasks is a top-level sidebar row that opens the vault-wide Tasks
       // tab in the active pane. Matches clicking the row.

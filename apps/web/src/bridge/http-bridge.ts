@@ -28,6 +28,7 @@ import type {
   DirectoryBrowseResult,
   FolderEntry,
   ImportedAsset,
+  LocalVaultEntry,
   NoteComment,
   NoteCommentInput,
   NoteContent,
@@ -248,6 +249,14 @@ function setVaultSettings(next: VaultSettings): Promise<VaultSettings> {
     method: 'POST',
     body: next as unknown as Record<string, unknown>
   })
+}
+
+function listLocalVaults(): Promise<LocalVaultEntry[]> {
+  return Promise.resolve([])
+}
+
+function openLocalVault(_root: string): Promise<VaultInfo | null> {
+  return Promise.resolve(null)
 }
 
 async function pickVault(): Promise<VaultInfo | null> {
@@ -793,6 +802,10 @@ async function openNoteWindow(relPath: string): Promise<void> {
   window.open(url, '_blank', 'noopener')
 }
 
+async function openVaultWindow(): Promise<VaultInfo | null> {
+  return null
+}
+
 async function toggleQuickCapture(): Promise<void> {
   // Web build can't bind a system-wide shortcut; the quick capture
   // window is desktop-only.
@@ -960,6 +973,8 @@ export const httpBridge: ZenBridge = {
   connectRemoteWorkspaceProfile: (_id: string) => connectRemoteWorkspaceProfile(),
 
   getCurrentVault,
+  listLocalVaults,
+  openLocalVault,
   pickVault,
   selectVaultPath,
   browseServerDirectories,
@@ -1014,6 +1029,7 @@ export const httpBridge: ZenBridge = {
   windowToggleMaximize,
   windowClose,
   openNoteWindow,
+  openVaultWindow,
   toggleQuickCapture,
   getQuickCaptureHotkey,
   setQuickCaptureHotkey,

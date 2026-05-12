@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { shortcutBindingFromEvent, sequenceTokenFromEvent } from './keymaps'
+import { getKeymapDefinition, shortcutBindingFromEvent, sequenceTokenFromEvent } from './keymaps'
 
 interface FakeEventInit {
   key: string
@@ -141,5 +141,14 @@ describe('sequenceTokenFromEvent', () => {
   it('records Shift+= as a sequence token of "=" (event.key="+" falls back to code)', () => {
     const event = fakeEvent({ key: '+', code: 'Equal', shiftKey: true })
     expect(sequenceTokenFromEvent(event)).toBe('=')
+  })
+})
+
+describe('leader keymap definitions', () => {
+  it('includes switch vault in leader bindings', () => {
+    expect(getKeymapDefinition('vim.leaderSwitchVault')).toMatchObject({
+      title: 'Leader: switch vault',
+      defaultBinding: 'v'
+    })
   })
 })

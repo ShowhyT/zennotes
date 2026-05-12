@@ -4,6 +4,7 @@ import type {
   CliInstallStatus,
   FolderEntry,
   ImportedAsset,
+  LocalVaultEntry,
   ListNotesPageRequest,
   ListNotesPageResponse,
   NoteComment,
@@ -88,6 +89,8 @@ export interface ZenBridge {
   ): Promise<{ vault: VaultInfo | null; capabilities: ServerCapabilities }>
 
   getCurrentVault(): Promise<VaultInfo | null>
+  listLocalVaults(): Promise<LocalVaultEntry[]>
+  openLocalVault(root: string): Promise<VaultInfo | null>
   pickVault(): Promise<VaultInfo | null>
   selectVaultPath(path: string): Promise<VaultInfo>
   browseServerDirectories(path?: string): Promise<DirectoryBrowseResult>
@@ -149,6 +152,7 @@ export interface ZenBridge {
   windowToggleMaximize(): void
   windowClose(): void
   openNoteWindow(relPath: string): Promise<void>
+  openVaultWindow(): Promise<VaultInfo | null>
   toggleQuickCapture(): Promise<void>
   getQuickCaptureHotkey(): Promise<string>
   setQuickCaptureHotkey(hotkey: string): Promise<{ ok: boolean; hotkey: string; error?: string }>

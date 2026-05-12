@@ -4,6 +4,7 @@ import { DEFAULT_VAULT_SETTINGS } from '@shared/ipc'
 import type {
   AssetMeta,
   FolderEntry,
+  LocalVaultEntry,
   NoteComment,
   NoteCommentInput,
   NoteContent,
@@ -102,6 +103,7 @@ export type NoteSortOrder =
 
 export type LineNumberMode = 'off' | 'absolute' | 'relative'
 export type WhichKeyHintMode = 'timed' | 'sticky'
+export type CommandPaletteInitialMode = 'main' | 'vault'
 
 const PREFS_KEY = 'zen:prefs:v2'
 const WORKSPACE_KEY = 'zen:workspace:v1'
@@ -163,6 +165,11 @@ async function listNotesFromBridge(): Promise<NoteMeta[]> {
     offset = page.nextOffset
     await nextRendererTask()
   }
+}
+
+async function refreshVaultIndexes(): Promise<void> {
+  const state = useStore.getState()
+  await Promise.all([state.refreshNotes(), state.refreshAssets()])
 }
 
 interface Prefs {
@@ -1234,6 +1241,7 @@ interface Store {
   workspaceMode: WorkspaceMode
   remoteWorkspaceInfo: RemoteWorkspaceInfo | null
   remoteWorkspaceProfiles: RemoteWorkspaceProfile[]
+  localVaults: LocalVaultEntry[]
   workspaceSetupError: string | null
   vaultSettings: VaultSettings
   notes: NoteMeta[]
@@ -1252,6 +1260,7 @@ interface Store {
   searchOpen: boolean
   vaultTextSearchOpen: boolean
   commandPaletteOpen: boolean
+  commandPaletteInitialMode: CommandPaletteInitialMode
   bufferPaletteOpen: boolean
   outlinePaletteOpen: boolean
   query: string
@@ -1479,7 +1488,7 @@ interface Store {
   exportActiveNotePdf: () => Promise<void>
   setSearchOpen: (open: boolean) => void
   setVaultTextSearchOpen: (open: boolean) => void
-  setCommandPaletteOpen: (open: boolean) => void
+  setCommandPaletteOpen: (open: boolean, mode?: CommandPaletteInitialMode) => void
   setBufferPaletteOpen: (open: boolean) => void
   setOutlinePaletteOpen: (open: boolean) => void
   setQuery: (q: string) => void
@@ -1630,6 +1639,7 @@ interface Store {
   ) => Promise<void>
   init: () => Promise<void>
   openVaultPicker: () => Promise<void>
+  openLocalVault: (root: string) => Promise<void>
   connectRemoteWorkspace: () => Promise<void>
   connectRemoteWorkspaceProfile: (id: string) => Promise<void>
   changeRemoteWorkspaceVaultPath: () => Promise<void>
@@ -1637,6 +1647,7 @@ interface Store {
   saveRemoteWorkspaceProfile: (input: RemoteWorkspaceProfileInput) => Promise<RemoteWorkspaceProfile>
   deleteRemoteWorkspaceProfile: (id: string) => Promise<void>
   refreshRemoteWorkspaceProfiles: () => Promise<RemoteWorkspaceProfile[]>
+  refreshLocalVaults: () => Promise<LocalVaultEntry[]>
   persistWorkspace: () => void
   flushDirtyNotes: () => Promise<void>
   refreshWorkspaceContext: () => Promise<RemoteWorkspaceInfo | null>
@@ -2271,6 +2282,7 @@ export const useStore = create<Store>((set, get) => {
   workspaceMode: 'local',
   remoteWorkspaceInfo: null,
   remoteWorkspaceProfiles: [],
+  localVaults: [],
   workspaceSetupError: null,
   vaultSettings: DEFAULT_VAULT_SETTINGS,
   notes: [],
@@ -2288,6 +2300,7 @@ export const useStore = create<Store>((set, get) => {
   searchOpen: false,
   vaultTextSearchOpen: false,
   commandPaletteOpen: false,
+  commandPaletteInitialMode: 'main',
   bufferPaletteOpen: false,
   outlinePaletteOpen: false,
   query: '',
@@ -3356,7 +3369,11 @@ export const useStore = create<Store>((set, get) => {
       vaultTextSearchOpen: open,
       searchOpen: open ? false : get().searchOpen
     }),
-  setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
+  setCommandPaletteOpen: (open, mode = 'main') =>
+    set({
+      commandPaletteOpen: open,
+      commandPaletteInitialMode: open ? mode : 'main'
+    }),
   setBufferPaletteOpen: (open) => set({ bufferPaletteOpen: open }),
   setOutlinePaletteOpen: (open) => set({ outlinePaletteOpen: open }),
   setQuery: (q) => set({ query: q }),
@@ -4407,6 +4424,22 @@ export const useStore = create<Store>((set, get) => {
     }
   },
 
+  refreshLocalVaults: async () => {
+    if (!window.zen.getCapabilities().supportsLocalFilesystemPickers) {
+      set({ localVaults: [] })
+      return []
+    }
+    try {
+      const localVaults = await window.zen.listLocalVaults()
+      set({ localVaults })
+      return localVaults
+    } catch (err) {
+      console.error('refreshLocalVaults failed', err)
+      set({ localVaults: [] })
+      return []
+    }
+  },
+
   init: async () => {
     if (get().initialized) return
     const startedAt = performance.now()
@@ -4414,12 +4447,14 @@ export const useStore = create<Store>((set, get) => {
     let initializedVault = false
     try {
       const remoteWorkspaceProfilesPromise = get().refreshRemoteWorkspaceProfiles()
+      const localVaultsPromise = get().refreshLocalVaults()
       const [remoteWorkspaceInfo, serverCapabilities] = await Promise.all([
         get().refreshWorkspaceContext(),
         window.zen.getServerCapabilities().catch(() => null)
       ])
       if (!(await ensureWebServerSession(serverCapabilities))) {
         void remoteWorkspaceProfilesPromise
+        void localVaultsPromise
         set({
           workspaceMode: workspaceModeFrom(remoteWorkspaceInfo),
           remoteWorkspaceInfo,
@@ -4434,6 +4469,7 @@ export const useStore = create<Store>((set, get) => {
       }
       const vault = await window.zen.getCurrentVault()
       void remoteWorkspaceProfilesPromise
+      void localVaultsPromise
       if (vault) {
         const vaultSettings = normalizeVaultSettings(await window.zen.getVaultSettings())
         set({
@@ -4444,7 +4480,7 @@ export const useStore = create<Store>((set, get) => {
           vaultSettings,
           workspaceRestored: false
         })
-        await get().refreshNotes()
+        await refreshVaultIndexes()
         await prefetchInitialVisibleNotes(get())
         await restoreWorkspaceForVault(vault)
         initializedVault = true
@@ -4536,6 +4572,7 @@ export const useStore = create<Store>((set, get) => {
 
     if (!vault) return
 
+    await get().refreshLocalVaults()
     const remoteWorkspaceInfo = await get().refreshWorkspaceContext()
 
     const vaultSettings = normalizeVaultSettings(await window.zen.getVaultSettings())
@@ -4568,8 +4605,57 @@ export const useStore = create<Store>((set, get) => {
       workspaceRestored: false
     })
     savePrefs(collectPrefs(get()))
-    await get().refreshNotes()
+    await refreshVaultIndexes()
     await restoreWorkspaceForVault(vault)
+  },
+
+  openLocalVault: async (root: string) => {
+    const trimmed = root.trim()
+    if (!trimmed || trimmed === get().vault?.root) return
+    try {
+      await get().flushDirtyNotes()
+      set({ workspaceSetupError: null })
+      const vault = await window.zen.openLocalVault(trimmed)
+      await get().refreshLocalVaults()
+      if (!vault) return
+
+      const remoteWorkspaceInfo = await get().refreshWorkspaceContext()
+      const vaultSettings = normalizeVaultSettings(await window.zen.getVaultSettings())
+      const fresh = makeLeaf()
+      set({
+        vault,
+        workspaceMode: workspaceModeFrom(remoteWorkspaceInfo),
+        remoteWorkspaceInfo,
+        workspaceSetupError: null,
+        vaultSettings,
+        notes: [],
+        folders: [],
+        hasAssetsDir: false,
+        assetFiles: [],
+        vaultTasks: [],
+        selectedTags: [],
+        view: { kind: 'folder', folder: 'inbox', subpath: '' },
+        selectedPath: null,
+        activeNote: null,
+        activeDirty: false,
+        paneLayout: fresh,
+        activePaneId: fresh.id,
+        noteContents: {},
+        noteDirty: {},
+        loadingNote: false,
+        noteBackstack: [],
+        noteForwardstack: [],
+        pendingJumpLocation: null,
+        pinnedRefPath: null,
+        workspaceRestored: false
+      })
+      savePrefs(collectPrefs(get()))
+      await refreshVaultIndexes()
+      await restoreWorkspaceForVault(vault)
+    } catch (err) {
+      console.error('openLocalVault failed', err)
+      window.alert(err instanceof Error ? err.message : String(err))
+    }
   },
 
   connectRemoteWorkspace: async () => {
@@ -4706,7 +4792,7 @@ export const useStore = create<Store>((set, get) => {
             : remoteWorkspaceInfo
       })
       savePrefs(collectPrefs(get()))
-      await get().refreshNotes()
+      await refreshVaultIndexes()
       await restoreWorkspaceForVault(vault)
     } catch (error) {
       window.alert(error instanceof Error ? error.message : String(error))
@@ -4783,7 +4869,7 @@ export const useStore = create<Store>((set, get) => {
         workspaceRestored: false
       })
       savePrefs(collectPrefs(get()))
-      await get().refreshNotes()
+      await refreshVaultIndexes()
       await restoreWorkspaceForVault(vault)
     } catch (error) {
       window.alert(error instanceof Error ? error.message : String(error))
@@ -4862,7 +4948,7 @@ export const useStore = create<Store>((set, get) => {
         workspaceRestored: false
       })
       savePrefs(collectPrefs(get()))
-      await get().refreshNotes()
+      await refreshVaultIndexes()
       await restoreWorkspaceForVault(selectedVault)
     } catch (error) {
       window.alert(error instanceof Error ? error.message : String(error))
@@ -4874,6 +4960,7 @@ export const useStore = create<Store>((set, get) => {
       await get().flushDirtyNotes()
       const vault = await window.zen.disconnectRemoteWorkspace()
       const remoteWorkspaceInfo = await get().refreshWorkspaceContext()
+      await get().refreshLocalVaults()
 
       if (!vault) {
         const fresh = makeLeaf()
@@ -4936,7 +5023,7 @@ export const useStore = create<Store>((set, get) => {
         workspaceRestored: false
       })
       savePrefs(collectPrefs(get()))
-      await get().refreshNotes()
+      await refreshVaultIndexes()
       await restoreWorkspaceForVault(vault)
     } catch (error) {
       window.alert(error instanceof Error ? error.message : String(error))

@@ -19,6 +19,7 @@ import { isQuickNotesTabPath } from "@shared/quick-notes";
 import {
   ArchiveIcon,
   ArrowUpRightIcon,
+  ChevronRightIcon,
   CheckSquareIcon,
   DocumentIcon,
   ExpandAllIcon,
@@ -69,6 +70,7 @@ import {
   SIDEBAR_PROGRESSIVE_RENDER_THRESHOLD,
   SIDEBAR_PROGRESSIVE_SENTINEL_MARGIN_PX,
 } from "../lib/sidebar-progressive";
+import { buildVaultSwitcherEntries } from "../lib/vault-switcher";
 
 const ACTIVE_TAG_PARSE_DELAY_MS = 220;
 const ACTIVE_TAG_PARSE_LARGE_BODY_CHARS = 120_000;
@@ -365,11 +367,30 @@ export function Sidebar(): JSX.Element {
   const systemFolderLabels = useStore((s) => s.systemFolderLabels);
   const workspaceMode = useStore((s) => s.workspaceMode);
   const remoteWorkspaceInfo = useStore((s) => s.remoteWorkspaceInfo);
+  const localVaults = useStore((s) => s.localVaults);
+  const remoteWorkspaceProfiles = useStore((s) => s.remoteWorkspaceProfiles);
+  const openVaultPicker = useStore((s) => s.openVaultPicker);
+  const openLocalVault = useStore((s) => s.openLocalVault);
+  const connectRemoteWorkspace = useStore((s) => s.connectRemoteWorkspace);
+  const connectRemoteWorkspaceProfile = useStore(
+    (s) => s.connectRemoteWorkspaceProfile,
+  );
+  const refreshLocalVaults = useStore((s) => s.refreshLocalVaults);
+  const refreshRemoteWorkspaceProfiles = useStore(
+    (s) => s.refreshRemoteWorkspaceProfiles,
+  );
   const moveNoteAction = useStore((s) => s.moveNote);
   const renameNote = useStore((s) => s.renameNote);
   const setVaultSettings = useStore((s) => s.setVaultSettings);
   const canRevealInFileManager =
     window.zen.getAppInfo().runtime === "desktop" && workspaceMode !== "remote";
+  const canSwitchLocalVaults =
+    window.zen.getAppInfo().runtime === "desktop" &&
+    window.zen.getCapabilities().supportsLocalFilesystemPickers;
+  const canUseRemoteWorkspaces =
+    window.zen.getAppInfo().runtime === "desktop" &&
+    window.zen.getCapabilities().supportsRemoteWorkspace;
+  const canSwitchVaults = canSwitchLocalVaults || canUseRemoteWorkspaces;
   const absolutePathLabel =
     workspaceMode === "remote" ? "Copy Server Path" : "Copy Absolute Path";
   const folderLabels = useMemo(
@@ -391,6 +412,17 @@ export function Sidebar(): JSX.Element {
   const remoteLabel = useMemo(
     () => remoteWorkspaceLabel(remoteWorkspaceInfo?.baseUrl ?? null),
     [remoteWorkspaceInfo?.baseUrl],
+  );
+  const vaultSwitcherEntries = useMemo(
+    () =>
+      buildVaultSwitcherEntries({
+        localVaults,
+        remoteProfiles: remoteWorkspaceProfiles,
+        currentVault: vault,
+        workspaceMode,
+        remoteWorkspaceInfo,
+      }),
+    [localVaults, remoteWorkspaceInfo, remoteWorkspaceProfiles, vault, workspaceMode],
   );
   const primaryNotesAtRoot = useMemo(
     () => isPrimaryNotesAtRoot(vaultSettings),
@@ -687,6 +719,36 @@ export function Sidebar(): JSX.Element {
   } | null>(null);
   const [sortMenu, setSortMenu] = useState<{ x: number; y: number } | null>(
     null,
+  );
+  const [vaultMenu, setVaultMenu] = useState<{ x: number; y: number } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (canSwitchLocalVaults) void refreshLocalVaults();
+    if (canUseRemoteWorkspaces) void refreshRemoteWorkspaceProfiles();
+  }, [
+    canSwitchLocalVaults,
+    canUseRemoteWorkspaces,
+    refreshLocalVaults,
+    refreshRemoteWorkspaceProfiles,
+  ]);
+
+  const openVaultSwitcher = useCallback(
+    (event: React.MouseEvent<HTMLElement>): void => {
+      if (!canSwitchVaults) return;
+      event.preventDefault();
+      if (canSwitchLocalVaults) void refreshLocalVaults();
+      if (canUseRemoteWorkspaces) void refreshRemoteWorkspaceProfiles();
+      setVaultMenu({ x: event.clientX, y: event.clientY });
+    },
+    [
+      canSwitchLocalVaults,
+      canSwitchVaults,
+      canUseRemoteWorkspaces,
+      refreshLocalVaults,
+      refreshRemoteWorkspaceProfiles,
+    ],
   );
 
   const openFolderIconPicker = useCallback(
@@ -1765,6 +1827,74 @@ export function Sidebar(): JSX.Element {
     ];
   }, [tagMenu, renameTag, deleteTag]);
 
+  const vaultMenuItems = useMemo<ContextMenuItem[]>(() => {
+    const items: ContextMenuItem[] = [];
+
+    if (vaultSwitcherEntries.length === 0) {
+      items.push({
+        label: "No vaults yet",
+        disabled: true,
+      });
+    } else {
+      for (const entry of vaultSwitcherEntries) {
+        items.push({
+          label: entry.name,
+          hint: entry.current ? "Current" : entry.kind === "remote" ? "Remote" : undefined,
+          icon: <VaultBadge name={entry.name} size={16} />,
+          disabled: entry.current || (entry.kind === "remote" && !entry.id),
+          onSelect: async () => {
+            if (entry.kind === "local") {
+              await openLocalVault(entry.root);
+              return;
+            }
+            if (entry.id) await connectRemoteWorkspaceProfile(entry.id);
+          },
+        });
+      }
+    }
+
+    items.push({ kind: "separator" });
+    if (canSwitchLocalVaults) {
+      items.push({
+        label: "Add Local Vault…",
+        icon: <PlusIcon className="h-4 w-4" />,
+        onSelect: async () => {
+          await openVaultPicker();
+        },
+      });
+    }
+    if (canUseRemoteWorkspaces) {
+      items.push({
+        label: "Connect to Remote Vault…",
+        icon: <ArrowUpRightIcon className="h-4 w-4" />,
+        onSelect: async () => {
+          await connectRemoteWorkspace();
+        },
+      });
+    }
+    if (canSwitchLocalVaults) {
+      items.push({
+        label: "Open Local Vault in New Window…",
+        icon: <ArrowUpRightIcon className="h-4 w-4" />,
+        onSelect: async () => {
+          await window.zen.openVaultWindow();
+          await refreshLocalVaults();
+        },
+      });
+    }
+
+    return items;
+  }, [
+    canSwitchLocalVaults,
+    canUseRemoteWorkspaces,
+    connectRemoteWorkspace,
+    connectRemoteWorkspaceProfile,
+    openLocalVault,
+    openVaultPicker,
+    refreshLocalVaults,
+    vaultSwitcherEntries,
+  ]);
+
   // A folder only shows the strong "selected" accent highlight when
   // the view matches AND no specific note is selected. Once the user
   // opens a note, the note row owns the selection visual and the
@@ -1816,6 +1946,8 @@ export function Sidebar(): JSX.Element {
   const idxCounter = useRef<{ value: number }>({ value: 0 });
   idxCounter.current.value = 0;
   const vimCursor = isSidebarFocused ? sidebarCursorIndex : -1;
+  const vaultHeaderIdx = canSwitchVaults ? idxCounter.current.value++ : -1;
+  const vaultHeaderVimHighlight = vimCursor === vaultHeaderIdx;
   // VimNav clamps cursor position via Math.min/Math.max on each
   // keystroke using the actual DOM element count — no extra clamping needed.
 
@@ -1959,23 +2091,56 @@ export function Sidebar(): JSX.Element {
     >
       {/* Vault header + top-right actions */}
       <div className="flex items-center justify-between px-3 pb-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <VaultBadge name={vault?.name ?? "ZenNotes"} size={28} />
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium text-ink-800">
-              {vault?.name ?? "ZenNotes"}
-            </div>
-            {workspaceMode === "remote" && (
-              <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-ink-500">
-                <span className="inline-flex items-center gap-1 rounded-full border border-paper-300/70 bg-paper-100/80 px-1.5 py-0.5 font-medium text-ink-700">
-                  <ArrowUpRightIcon className="h-3 w-3" />
-                  Remote
-                </span>
-                <span className="truncate">{remoteLabel}</span>
+        {canSwitchVaults ? (
+          <button
+            type="button"
+            onClick={openVaultSwitcher}
+            onContextMenu={openVaultSwitcher}
+            className={[
+              "group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-paper-200/70",
+              vaultHeaderVimHighlight ? "vim-cursor" : "",
+            ].join(" ")}
+            title="Switch vault"
+            aria-label="Switch vault"
+            data-sidebar-idx={vaultHeaderIdx}
+            data-sidebar-type="vault"
+          >
+            <VaultBadge name={vault?.name ?? "ZenNotes"} size={28} />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-medium text-ink-800">
+                {vault?.name ?? "ZenNotes"}
               </div>
-            )}
+              {workspaceMode === "remote" && (
+                <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-ink-500">
+                  <span className="inline-flex items-center gap-1 rounded-full border border-paper-300/70 bg-paper-100/80 px-1.5 py-0.5 font-medium text-ink-700">
+                    <ArrowUpRightIcon className="h-3 w-3" />
+                    Remote
+                  </span>
+                  <span className="truncate">{remoteLabel}</span>
+                </div>
+              )}
+            </div>
+            <ChevronRightIcon className="h-3.5 w-3.5 rotate-90 text-ink-400 transition-colors group-hover:text-ink-700" />
+          </button>
+        ) : (
+          <div className="flex min-w-0 items-center gap-2">
+            <VaultBadge name={vault?.name ?? "ZenNotes"} size={28} />
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium text-ink-800">
+                {vault?.name ?? "ZenNotes"}
+              </div>
+              {workspaceMode === "remote" && (
+                <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-ink-500">
+                  <span className="inline-flex items-center gap-1 rounded-full border border-paper-300/70 bg-paper-100/80 px-1.5 py-0.5 font-medium text-ink-700">
+                    <ArrowUpRightIcon className="h-3 w-3" />
+                    Remote
+                  </span>
+                  <span className="truncate">{remoteLabel}</span>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
         <div className="flex items-center gap-0.5">
           <IconBtn title="New note" onClick={() => void createAndOpen("inbox")}>
             <PlusIcon />
@@ -2386,6 +2551,14 @@ export function Sidebar(): JSX.Element {
           y={tagMenu.y}
           items={tagMenuItems}
           onClose={() => setTagMenu(null)}
+        />
+      )}
+      {vaultMenu && (
+        <ContextMenu
+          x={vaultMenu.x}
+          y={vaultMenu.y}
+          items={vaultMenuItems}
+          onClose={() => setVaultMenu(null)}
         />
       )}
       {folderMenu && (

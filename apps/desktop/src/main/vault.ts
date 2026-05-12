@@ -19,6 +19,7 @@ import {
   NoteContent,
   NoteFolder,
   NoteMeta,
+  LocalVaultEntry,
   VaultDemoTourResult,
   VaultTextSearchBackendPreference,
   VaultTextSearchCapabilities,
@@ -175,9 +176,12 @@ export interface PersistedRemoteWorkspaceProfile extends PersistedRemoteWorkspac
   lastConnectedAt: number | null
 }
 
+export type PersistedLocalVault = LocalVaultEntry
+
 export interface PersistedConfig {
   workspaceMode: 'local' | 'remote'
   vaultRoot: string | null
+  localVaults: PersistedLocalVault[]
   remoteWorkspace: PersistedRemoteWorkspaceConfig | null
   remoteWorkspaceProfileId: string | null
   remoteWorkspaceProfiles: PersistedRemoteWorkspaceProfile[]
@@ -193,6 +197,7 @@ export const DEFAULT_QUICK_CAPTURE_HOTKEY = 'CommandOrControl+Shift+Space'
 const DEFAULT_CONFIG: PersistedConfig = {
   workspaceMode: 'local',
   vaultRoot: null,
+  localVaults: [],
   remoteWorkspace: null,
   remoteWorkspaceProfileId: null,
   remoteWorkspaceProfiles: [],
@@ -260,6 +265,22 @@ function normalizePersistedConfig(value: unknown): PersistedConfig {
           : null
     }
   }
+  const normalizeLocalVault = (candidate: unknown): PersistedLocalVault | null => {
+    if (!candidate || typeof candidate !== 'object') return null
+    const value = candidate as Record<string, unknown>
+    const rawRoot = typeof value.root === 'string' ? value.root.trim() : ''
+    if (!rawRoot) return null
+    const root = path.resolve(rawRoot)
+    const name =
+      typeof value.name === 'string' && value.name.trim()
+        ? value.name.trim()
+        : path.basename(root)
+    const lastOpenedAt =
+      typeof value.lastOpenedAt === 'number' && Number.isFinite(value.lastOpenedAt)
+        ? value.lastOpenedAt
+        : 0
+    return { root, name, lastOpenedAt }
+  }
   const legacyRemoteWorkspace =
     candidate.remoteWorkspace &&
     typeof candidate.remoteWorkspace === 'object' &&
@@ -287,6 +308,16 @@ function normalizePersistedConfig(value: unknown): PersistedConfig {
       lastConnectedAt: null
     })
   }
+  const localVaultsByRoot = new Map<string, PersistedLocalVault>()
+  const rawLocalVaults = Array.isArray(candidate.localVaults) ? candidate.localVaults : []
+  for (const raw of rawLocalVaults) {
+    const entry = normalizeLocalVault(raw)
+    if (!entry) continue
+    const existing = localVaultsByRoot.get(entry.root)
+    if (!existing || entry.lastOpenedAt > existing.lastOpenedAt) {
+      localVaultsByRoot.set(entry.root, entry)
+    }
+  }
   const quickCaptureHotkey =
     typeof candidate.quickCaptureHotkey === 'string'
       ? candidate.quickCaptureHotkey.trim()
@@ -294,6 +325,9 @@ function normalizePersistedConfig(value: unknown): PersistedConfig {
   return {
     workspaceMode: candidate.workspaceMode === 'remote' ? 'remote' : 'local',
     vaultRoot: typeof candidate.vaultRoot === 'string' ? candidate.vaultRoot : null,
+    localVaults: [...localVaultsByRoot.values()].sort(
+      (a, b) => b.lastOpenedAt - a.lastOpenedAt || a.name.localeCompare(b.name)
+    ),
     remoteWorkspace: legacyRemoteWorkspace,
     remoteWorkspaceProfileId:
       typeof candidate.remoteWorkspaceProfileId === 'string' &&
@@ -305,6 +339,25 @@ function normalizePersistedConfig(value: unknown): PersistedConfig {
     zoomFactor,
     quickCaptureHotkey
   }
+}
+
+export function rememberLocalVault(
+  entries: PersistedLocalVault[],
+  vault: VaultInfo,
+  openedAt = Date.now()
+): PersistedLocalVault[] {
+  const root = path.resolve(vault.root)
+  const next: PersistedLocalVault = {
+    root,
+    name: vault.name || path.basename(root),
+    lastOpenedAt: openedAt
+  }
+  return [
+    next,
+    ...entries
+      .filter((entry) => path.resolve(entry.root) !== root)
+      .sort((a, b) => b.lastOpenedAt - a.lastOpenedAt || a.name.localeCompare(b.name))
+  ].slice(0, 20)
 }
 
 export async function loadConfig(): Promise<PersistedConfig> {
