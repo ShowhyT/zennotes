@@ -11,6 +11,7 @@ import { resolveQuickNoteTitle } from './lib/quick-note-title'
 import { matchesShortcut } from './lib/keymaps'
 import { requestPaneMode } from './lib/pane-mode'
 import { recordRendererPerf } from './lib/perf'
+import { focusEditorNormalMode } from './lib/editor-focus'
 import {
   appUpdateNoticeLabel,
   appUpdatePrimaryActionLabel,
@@ -475,22 +476,27 @@ function App(): JSX.Element {
       }
       if (e.key === 'Escape' && state.searchOpen) {
         setSearchOpen(false)
+        focusEditorNormalMode()
         return
       }
       if (e.key === 'Escape' && state.vaultTextSearchOpen) {
         setVaultTextSearchOpen(false)
+        focusEditorNormalMode()
         return
       }
       if (e.key === 'Escape' && state.commandPaletteOpen) {
         setCommandPaletteOpen(false)
+        focusEditorNormalMode()
         return
       }
       if (e.key === 'Escape' && state.bufferPaletteOpen) {
         setBufferPaletteOpen(false)
+        focusEditorNormalMode()
         return
       }
       if (e.key === 'Escape' && state.outlinePaletteOpen) {
         setOutlinePaletteOpen(false)
+        focusEditorNormalMode()
         return
       }
       // ⌘1 — toggle sidebar

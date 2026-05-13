@@ -13,6 +13,7 @@ import {
   buildVaultSwitcherEntries,
   type VaultSwitcherEntry
 } from '../lib/vault-switcher'
+import { focusEditorNormalMode } from '../lib/editor-focus'
 
 type Mode = 'main' | 'theme' | 'vault'
 
@@ -191,6 +192,7 @@ export function CommandPalette(): JSX.Element {
       revertTheme()
     }
     setOpen(false)
+    focusEditorNormalMode()
   }
 
   /* -------- Actions -------- */
@@ -216,6 +218,7 @@ export function CommandPalette(): JSX.Element {
     setTheme({ id: theme.id, family: theme.family, mode: theme.mode })
     committedRef.current = true
     setOpen(false)
+    focusEditorNormalMode()
   }
 
   const switchVault = async (entry: VaultSwitcherEntry): Promise<void> => {
@@ -289,6 +292,7 @@ export function CommandPalette(): JSX.Element {
                 }
               } else if (e.key === 'Escape') {
                 e.preventDefault()
+                e.stopPropagation()
                 if (mode !== 'main') {
                   returnToMain()
                   return

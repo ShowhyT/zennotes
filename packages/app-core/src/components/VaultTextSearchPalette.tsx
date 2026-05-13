@@ -8,6 +8,7 @@ import { useStore } from '../store'
 import { resolveSystemFolderLabels } from '../lib/system-folder-labels'
 import { isPaletteNextKey, isPalettePreviousKey } from '../lib/palette-nav'
 import { recordRendererPerf } from '../lib/perf'
+import { focusEditorNormalMode } from '../lib/editor-focus'
 
 type ResolvedVaultTextSearchBackend = 'builtin' | 'ripgrep' | 'fzf'
 
@@ -362,12 +363,18 @@ export function VaultTextSearchPalette(): JSX.Element {
   const openMatch = async (match: VaultTextSearchMatch): Promise<void> => {
     setOpen(false)
     await openNoteAtOffset(match.path, match.offset, { scrollMode: 'center' })
+    focusEditorNormalMode()
+  }
+
+  const close = (): void => {
+    setOpen(false)
+    focusEditorNormalMode()
   }
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 pt-[12vh] backdrop-blur-sm"
-      onClick={() => setOpen(false)}
+      onClick={close}
     >
       <div
         className="w-[min(760px,92vw)] overflow-hidden rounded-xl bg-paper-100 shadow-float ring-1 ring-paper-300/70"
@@ -400,7 +407,8 @@ export function VaultTextSearchPalette(): JSX.Element {
               }
               if (e.key === 'Escape') {
                 e.preventDefault()
-                setOpen(false)
+                e.stopPropagation()
+                close()
               }
             }}
             className="w-full bg-transparent text-base text-ink-900 outline-none placeholder:text-ink-400"

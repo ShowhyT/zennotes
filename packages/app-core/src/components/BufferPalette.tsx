@@ -25,6 +25,7 @@ import { isArchiveTabPath } from '@shared/archive'
 import { isTrashTabPath } from '@shared/trash'
 import { isQuickNotesTabPath } from '@shared/quick-notes'
 import { resolveSystemFolderLabels, type SystemFolderLabels } from '../lib/system-folder-labels'
+import { focusEditorNormalMode } from '../lib/editor-focus'
 
 interface BufferEntry {
   path: string
@@ -197,7 +198,6 @@ export function BufferPalette(): JSX.Element {
   const setOpen = useStore((s) => s.setBufferPaletteOpen)
   const setActivePane = useStore((s) => s.setActivePane)
   const focusTabInPane = useStore((s) => s.focusTabInPane)
-  const setFocusedPanel = useStore((s) => s.setFocusedPanel)
 
   // Select primitives separately so each selector returns a stable
   // reference; compute the derived entries list with useMemo. Returning
@@ -265,16 +265,18 @@ export function BufferPalette(): JSX.Element {
       setActivePane(targetPaneId)
     }
 
-    setFocusedPanel('editor')
-    requestAnimationFrame(() => {
-      useStore.getState().editorViewRef?.focus()
-    })
+    focusEditorNormalMode()
+  }
+
+  const close = (): void => {
+    setOpen(false)
+    focusEditorNormalMode()
   }
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 pt-[15vh] backdrop-blur-sm"
-      onClick={() => setOpen(false)}
+      onClick={close}
     >
       <div
         className="w-[min(560px,90vw)] overflow-hidden rounded-xl bg-paper-100 shadow-float ring-1 ring-paper-300/70"
@@ -297,6 +299,10 @@ export function BufferPalette(): JSX.Element {
                 e.preventDefault()
                 const entry = results[active]
                 if (entry) void open(entry)
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                e.stopPropagation()
+                close()
               }
             }}
             className="w-full bg-transparent text-base text-ink-900 outline-none placeholder:text-ink-400"

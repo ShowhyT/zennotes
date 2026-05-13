@@ -17,6 +17,7 @@ import { isTagsTabPath } from '@shared/tags'
 import { isTasksTabPath } from '@shared/tasks'
 import { isTrashTabPath } from '@shared/trash'
 import { isQuickNotesTabPath } from '@shared/quick-notes'
+import { focusEditorNormalMode } from '../lib/editor-focus'
 
 function isVirtualPath(path: string | null): boolean {
   if (!path) return true
@@ -68,12 +69,18 @@ export function OutlinePalette(): JSX.Element {
         detail: { line: item.line }
       })
     )
+    focusEditorNormalMode()
+  }
+
+  const close = (): void => {
+    setOpen(false)
+    focusEditorNormalMode()
   }
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 pt-[15vh] backdrop-blur-sm"
-      onClick={() => setOpen(false)}
+      onClick={close}
     >
       <div
         className="w-[min(560px,90vw)] overflow-hidden rounded-xl bg-paper-100 shadow-float ring-1 ring-paper-300/70"
@@ -96,6 +103,10 @@ export function OutlinePalette(): JSX.Element {
                 e.preventDefault()
                 const item = results[active]
                 if (item) jump(item)
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                e.stopPropagation()
+                close()
               }
             }}
             className="w-full bg-transparent text-base text-ink-900 outline-none placeholder:text-ink-400"

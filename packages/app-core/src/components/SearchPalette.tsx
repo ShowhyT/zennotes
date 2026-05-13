@@ -7,12 +7,12 @@ import {
   parseNoteSearchQuery,
   searchNoteIndex
 } from '../lib/note-search'
+import { focusEditorNormalMode } from '../lib/editor-focus'
 
 export function SearchPalette(): JSX.Element {
   const notes = useStore((s) => s.notes)
   const setSearchOpen = useStore((s) => s.setSearchOpen)
   const selectNote = useStore((s) => s.selectNote)
-  const setFocusedPanel = useStore((s) => s.setFocusedPanel)
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -44,16 +44,18 @@ export function SearchPalette(): JSX.Element {
   const open = async (note: NoteMeta): Promise<void> => {
     setSearchOpen(false)
     await selectNote(note.path)
-    setFocusedPanel('editor')
-    requestAnimationFrame(() => {
-      useStore.getState().editorViewRef?.focus()
-    })
+    focusEditorNormalMode()
+  }
+
+  const close = (): void => {
+    setSearchOpen(false)
+    focusEditorNormalMode()
   }
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 pt-[15vh] backdrop-blur-sm"
-      onClick={() => setSearchOpen(false)}
+      onClick={close}
     >
       <div
         className="w-[min(560px,90vw)] overflow-hidden rounded-xl bg-paper-100 shadow-float ring-1 ring-paper-300/70"
@@ -76,6 +78,10 @@ export function SearchPalette(): JSX.Element {
                 e.preventDefault()
                 const note = results[active]
                 if (note) open(note)
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                e.stopPropagation()
+                close()
               }
             }}
             className="w-full bg-transparent text-base text-ink-900 outline-none placeholder:text-ink-400"
