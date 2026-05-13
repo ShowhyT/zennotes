@@ -70,6 +70,20 @@ async function flushAsyncWork(): Promise<void> {
   await new Promise((resolve) => window.setTimeout(resolve, 0))
 }
 
+function deferred<T>(): {
+  promise: Promise<T>
+  resolve: (value: T) => void
+  reject: (reason?: unknown) => void
+} {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 beforeEach(() => {
   vi.restoreAllMocks()
 })
@@ -161,5 +175,28 @@ describe('local vault shortcuts', () => {
     expect(listAssets).toHaveBeenCalledTimes(1)
     expect(useStore.getState().assetFiles).toEqual(assetFiles)
     expect(useStore.getState().hasAssetsDir).toBe(true)
+  })
+})
+
+describe('vault text search jumps', () => {
+  it('records the pending editor jump before loading an unopened note', async () => {
+    const note = makeNote('first line\nsecond line target\n')
+    const pendingRead = deferred<ReturnType<typeof makeNote>>()
+    installZen({
+      readNote: vi.fn().mockReturnValue(pendingRead.promise)
+    })
+
+    const { useStore } = await loadStore()
+    const open = useStore.getState().openNoteAtOffset(note.path, 18, { scrollMode: 'center' })
+
+    expect(useStore.getState().pendingJumpLocation).toMatchObject({
+      path: note.path,
+      editorSelectionAnchor: 18,
+      editorSelectionHead: 18,
+      editorScrollMode: 'center'
+    })
+
+    pendingRead.resolve(note)
+    await open
   })
 })

@@ -110,7 +110,7 @@ function renderHighlightedText(text: string, query: string): JSX.Element {
     nodes.push(
       <mark
         key={`hit-${index}-${start}`}
-        className="rounded-sm bg-accent/18 px-[1px] text-accent"
+        className="rounded-sm bg-accent/[0.14] px-[1px] text-current ring-1 ring-inset ring-accent/[0.24]"
       >
         {text.slice(start, end)}
       </mark>

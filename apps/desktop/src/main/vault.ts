@@ -617,7 +617,7 @@ async function folderRoot(root: string, folder: NoteFolder): Promise<string> {
 }
 
 export function folderForRelativePath(rel: string): NoteFolder | null {
-  const normalized = toPosix(rel)
+  const normalized = normalizeVaultRelativePath(rel)
   const top = normalized.split('/')[0]
   if (SYSTEM_FOLDERS.has(top as NoteFolder)) return top as NoteFolder
   if (!top || top.startsWith('.')) return null
@@ -655,6 +655,11 @@ export function vaultInfo(root: string): VaultInfo {
 
 function toPosix(p: string): string {
   return p.split(path.sep).join('/')
+}
+
+function normalizeVaultRelativePath(rel: string): string {
+  const normalized = toPosix(path.normalize(rel)).replace(/^(\.\/)+/, '')
+  return normalized === '.' ? '' : normalized
 }
 
 function markdownDestination(p: string): string {
@@ -1210,12 +1215,13 @@ async function collectRipgrepSearchCandidates(
   try {
     const ripgrep = await searchExecutable('ripgrep', paths)
     if (!ripgrep) return []
-    const searchRoots = await Promise.all(
+    const resolvedSearchRoots = await Promise.all(
       SEARCHABLE_TEXT_FOLDERS.map(async (folder) => {
         const dir = await folderRoot(root, folder)
-        return toPosix(path.relative(root, dir)) || '.'
+        return normalizeVaultRelativePath(path.relative(root, dir)) || '.'
       })
     )
+    const searchRoots = resolvedSearchRoots.includes('.') ? ['.'] : resolvedSearchRoots
     const result = await execFileAsync(
       ripgrep,
       [
@@ -1259,7 +1265,7 @@ async function collectRipgrepSearchCandidates(
     const lineNumber = data?.line_number
     const relPath =
       rawPath && typeof rawPath === 'object' && typeof (rawPath as { text?: unknown }).text === 'string'
-        ? toPosix((rawPath as { text: string }).text)
+        ? normalizeVaultRelativePath((rawPath as { text: string }).text)
         : null
     const rawLineText =
       rawLines && typeof rawLines === 'object' && typeof (rawLines as { text?: unknown }).text === 'string'
@@ -1267,7 +1273,7 @@ async function collectRipgrepSearchCandidates(
         : null
     if (!relPath || rawLineText == null || typeof lineNumber !== 'number') continue
     const folder = noteFolderFromRelPath(relPath)
-    if (!folder) continue
+    if (!folder || !SEARCHABLE_TEXT_FOLDERS.includes(folder)) continue
     candidates.push({
       path: relPath,
       title: path.basename(relPath, path.extname(relPath)),
@@ -1314,7 +1320,7 @@ async function runFzfSearch(
   return await new Promise((resolve, reject) => {
     const child = spawn(
       fzf,
-      ['--filter', query, '--nth=2,6,1', '--tiebreak=index'],
+      ['--filter', query, '--delimiter=\t', '--nth=1,2,5', '--tiebreak=index'],
       { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }
     )
 
@@ -1347,7 +1353,15 @@ async function runFzfSearch(
             lineText
           } as VaultTextSearchCandidate
         })
-      resolve(matches)
+      if (matches.length > 0) {
+        resolve(matches)
+        return
+      }
+      resolve(
+        rankSearchCandidates(query, candidates, limit).map(
+          ({ score: _score, ...candidate }) => candidate
+        )
+      )
     })
 
     for (const candidate of candidates) {

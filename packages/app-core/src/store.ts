@@ -2782,17 +2782,25 @@ export const useStore = create<Store>((set, get) => {
   openNoteAtOffset: async (relPath, offset, options) => {
     const state = get()
     const anchor = Math.max(0, offset)
-    await get().openNoteInPane(state.activePaneId, relPath)
+    const pendingJumpLocation = {
+      path: relPath,
+      editorSelectionAnchor: anchor,
+      editorSelectionHead: anchor,
+      editorScrollTop: 0,
+      previewScrollTop: 0,
+      editorScrollMode: options?.scrollMode ?? 'center'
+    }
     set({
-      pendingJumpLocation: {
-        path: relPath,
-        editorSelectionAnchor: anchor,
-        editorSelectionHead: anchor,
-        editorScrollTop: 0,
-        previewScrollTop: 0,
-        editorScrollMode: options?.scrollMode ?? 'center'
-      },
+      pendingJumpLocation,
       focusedPanel: 'editor'
+    })
+    await get().openNoteInPane(state.activePaneId, relPath)
+    set((s) => {
+      if (s.selectedPath === relPath) return { focusedPanel: 'editor' }
+      if (s.pendingJumpLocation?.path === relPath) {
+        return { pendingJumpLocation: null, focusedPanel: 'editor' }
+      }
+      return { focusedPanel: 'editor' }
     })
   },
 

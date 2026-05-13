@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -163,6 +163,143 @@ describe('searchVaultText', () => {
       rel
     )
     expect((await searchVaultText(root, 'beta', 'builtin')).map((m) => m.path)).toContain(rel)
+  })
+
+  it('matches note body text when auto resolves to fzf', async () => {
+    const root = await makeTempDir('zennotes-search-fzf-')
+    await ensureVaultLayout(root)
+    const rel = 'inbox/fzf.md'
+    await writeFile(path.join(root, rel), 'first line\nneedle unique body\n', 'utf8')
+
+    const fzfPath = path.join(root, 'fzf')
+    await writeFile(
+      fzfPath,
+      [
+        '#!/usr/bin/env node',
+        "const args = process.argv.slice(2);",
+        "if (args.includes('--version')) { console.log('fake fzf'); process.exit(0); }",
+        "const filter = args[args.indexOf('--filter') + 1] ?? '';",
+        "const delimiterArg = args.find((arg) => arg.startsWith('--delimiter='));",
+        "const delimiter = delimiterArg ? delimiterArg.slice('--delimiter='.length) : null;",
+        "const nthArg = args.find((arg) => arg.startsWith('--nth='));",
+        "const fields = (nthArg ? nthArg.slice('--nth='.length) : '').split(',').map((part) => Number(part)).filter(Boolean);",
+        "let input = '';",
+        "process.stdin.setEncoding('utf8');",
+        "process.stdin.on('data', (chunk) => { input += chunk; });",
+        "process.stdin.on('end', () => {",
+        "  const rows = input.split(/\\r?\\n/).filter(Boolean);",
+        "  const matches = rows.filter((row) => {",
+        "    const parts = delimiter === '\\t' ? row.split('\\t') : row.trim().split(/\\s+/);",
+        "    const haystack = (fields.length > 0 ? fields.map((field) => parts[field - 1] ?? '').join(' ') : row).toLowerCase();",
+        "    return haystack.includes(filter.toLowerCase());",
+        "  });",
+        "  process.stdout.write(matches.join('\\n'));",
+        "  if (matches.length > 0) process.stdout.write('\\n');",
+        "});",
+        ''
+      ].join('\n'),
+      'utf8'
+    )
+    await chmod(fzfPath, 0o755)
+
+    const matches = await searchVaultText(root, 'needle', 'auto', {
+      fzfPath,
+      ripgrepPath: path.join(root, 'rg')
+    })
+
+    expect(matches).toMatchObject([
+      {
+        path: rel,
+        lineNumber: 2,
+        offset: 'first line\n'.length
+      }
+    ])
+  })
+
+  it('normalizes root-mode ripgrep candidates before fzf search', async () => {
+    const root = await makeTempDir('zennotes-search-rg-root-')
+    await ensureVaultLayout(root)
+    const settings = await getVaultSettings(root)
+    await setVaultSettings(root, { ...settings, primaryNotesLocation: 'root' })
+
+    await mkdir(path.join(root, 'demo'), { recursive: true })
+    await mkdir(path.join(root, 'quick'), { recursive: true })
+    await mkdir(path.join(root, 'trash'), { recursive: true })
+    await writeFile(path.join(root, 'demo/root.md'), '# Root\n\nneedle in root mode\n', 'utf8')
+    await writeFile(path.join(root, 'quick/quick.md'), '# Quick\n\nneedle in quick\n', 'utf8')
+    await writeFile(path.join(root, 'trash/trash.md'), '# Trash\n\nneedle should stay hidden\n', 'utf8')
+
+    const ripgrepPath = path.join(root, 'rg')
+    await writeFile(
+      ripgrepPath,
+      [
+        '#!/usr/bin/env node',
+        "const args = process.argv.slice(2);",
+        "if (args.includes('--version')) { console.log('fake rg'); process.exit(0); }",
+        'const events = [',
+        "  { type: 'match', data: { path: { text: './demo/root.md' }, lines: { text: 'needle in root mode\\n' }, line_number: 3 } },",
+        "  { type: 'match', data: { path: { text: './quick/quick.md' }, lines: { text: 'needle in quick\\n' }, line_number: 3 } },",
+        "  { type: 'match', data: { path: { text: './trash/trash.md' }, lines: { text: 'needle should stay hidden\\n' }, line_number: 3 } }",
+        '];',
+        "process.stdout.write(events.map((event) => JSON.stringify(event)).join('\\n') + '\\n');",
+        ''
+      ].join('\n'),
+      'utf8'
+    )
+    await chmod(ripgrepPath, 0o755)
+
+    const fzfPath = path.join(root, 'fzf')
+    await writeFile(
+      fzfPath,
+      [
+        '#!/usr/bin/env node',
+        "const args = process.argv.slice(2);",
+        "if (args.includes('--version')) { console.log('fake fzf'); process.exit(0); }",
+        'process.stdin.pipe(process.stdout);',
+        ''
+      ].join('\n'),
+      'utf8'
+    )
+    await chmod(fzfPath, 0o755)
+
+    const matches = await searchVaultText(root, 'needle', 'auto', { ripgrepPath, fzfPath })
+
+    expect(matches.map((match) => ({ path: match.path, folder: match.folder }))).toEqual([
+      { path: 'demo/root.md', folder: 'inbox' },
+      { path: 'quick/quick.md', folder: 'quick' }
+    ])
+  })
+
+  it('falls back to built-in ranking when fzf emits no rows', async () => {
+    const root = await makeTempDir('zennotes-search-fzf-empty-')
+    await ensureVaultLayout(root)
+    const rel = 'inbox/fallback.md'
+    await writeFile(path.join(root, rel), 'first line\nneedle still exists\n', 'utf8')
+
+    const fzfPath = path.join(root, 'fzf')
+    await writeFile(
+      fzfPath,
+      [
+        '#!/usr/bin/env node',
+        "const args = process.argv.slice(2);",
+        "if (args.includes('--version')) { console.log('fake fzf'); process.exit(0); }",
+        'process.stdin.resume();',
+        ''
+      ].join('\n'),
+      'utf8'
+    )
+    await chmod(fzfPath, 0o755)
+
+    const matches = await searchVaultText(root, 'needle', 'auto', {
+      fzfPath,
+      ripgrepPath: path.join(root, 'rg')
+    })
+
+    expect(matches[0]).toMatchObject({
+      path: rel,
+      lineNumber: 2,
+      offset: 'first line\n'.length
+    })
   })
 })
 
