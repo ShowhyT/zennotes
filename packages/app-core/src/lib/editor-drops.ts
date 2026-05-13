@@ -3,6 +3,41 @@
  * dropped onto the editor. Kept out of React component files so every
  * pane can use them without duplication.
  */
+import type { AssetMeta, ImportedAsset } from '@shared/ipc'
+
+export function importedAssetForExistingVaultAsset(asset: AssetMeta): ImportedAsset {
+  return {
+    name: asset.name,
+    path: asset.path,
+    kind: asset.kind,
+    markdown: `![[${asset.path}]]`
+  }
+}
+
+export function formatImportedAssetsForInsertion(
+  imported: ImportedAsset[],
+  before: string,
+  after: string
+): string {
+  let insert = imported.map((asset) => asset.markdown).join('\n\n')
+  const wantsStandalonePreview = imported.some(
+    (asset) =>
+      asset.kind === 'image' ||
+      asset.kind === 'pdf' ||
+      asset.kind === 'audio' ||
+      asset.kind === 'video'
+  )
+
+  if (wantsStandalonePreview) {
+    if (before && before !== '\n') insert = `\n\n${insert}`
+    if (after && after !== '\n') return `${insert.replace(/\n*$/, '')}\n\n`
+    return `${insert.replace(/\n*$/, '')}\n`
+  }
+
+  if (before && before !== '\n') insert = `\n${insert}`
+  if (after && after !== '\n') insert = `${insert}\n`
+  return insert
+}
 
 function droppedFilePaths(files: FileList | File[]): string[] {
   const getPathForFile =

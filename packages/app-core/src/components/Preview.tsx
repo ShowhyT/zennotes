@@ -36,6 +36,8 @@ import {
 import { NoteHoverPreview } from "./NoteHoverPreview";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { ArrowUpRightIcon, MaximizeIcon, MinimizeIcon } from "./icons";
+import { promptApp } from "../lib/prompt-requests";
+import { confirmApp } from "../lib/confirm-requests";
 
 // ---------------------------------------------------------------------------
 // Mermaid: lazy singleton + theme-aware render
@@ -359,6 +361,8 @@ export const Preview = memo(function Preview({
   const vault = useStore((s) => s.vault);
   const notes = useStore((s) => s.notes);
   const assetFiles = useStore((s) => s.assetFiles);
+  const refreshAssets = useStore((s) => s.refreshAssets);
+  const deleteAssetAction = useStore((s) => s.deleteAsset);
   const effectiveMode = usePreviewDiagramThemeMode();
   const selectNote = useStore((s) => s.selectNote);
   const openNoteInTab = useStore((s) => s.openNoteInTab);
@@ -408,6 +412,15 @@ export const Preview = memo(function Preview({
   const workspaceMode = useStore((s) => s.workspaceMode);
   const canRevealInFileManager =
     window.zen.getAppInfo().runtime === "desktop" && workspaceMode !== "remote";
+  const canManageAssets =
+    window.zen.getAppInfo().runtime === "desktop" &&
+    workspaceMode !== "remote" &&
+    typeof window.zen.renameAsset === "function" &&
+    typeof window.zen.moveAsset === "function" &&
+    typeof window.zen.duplicateAsset === "function";
+  const canDeleteAssets =
+    window.zen.getAppInfo().runtime === "desktop" &&
+    workspaceMode !== "remote";
 
   const html = useMemo(() => renderMarkdown(markdown), [markdown]);
   const assetFilesKey = useMemo(
@@ -705,37 +718,152 @@ export const Preview = memo(function Preview({
 
   const assetMenuItems = useMemo<ContextMenuItem[]>(() => {
     if (!assetMenu) return [];
+    const vaultRel = assetMenu.vaultRel;
+    const asset = vaultRel ? assetFiles.find((entry) => entry.path === vaultRel) : null;
+    const root = vault?.root ?? "";
+    const sep = root.includes("\\") ? "\\" : "/";
+    const abs =
+      vaultRel && root
+        ? [root.replace(/[\\/]+$/, ""), ...vaultRel.split("/").filter(Boolean)].join(
+            sep,
+          )
+        : "";
+    const currentDir = vaultRel?.split("/").slice(0, -1).join("/") ?? "";
     const items: ContextMenuItem[] = [
+      {
+        label: "Open",
+        onSelect: async () => {
+          if (vaultRel) await openNoteInTab(assetTabPath(vaultRel));
+        },
+        disabled: !vaultRel,
+      },
       {
         label: "Open in New Tab",
         onSelect: async () => {
-          if (assetMenu.vaultRel) await openNoteInTab(assetTabPath(assetMenu.vaultRel));
+          if (vaultRel) await openNoteInTab(assetTabPath(vaultRel));
         },
-        disabled: !assetMenu.vaultRel,
+        disabled: !vaultRel,
       },
+    ];
+
+    if (canManageAssets && vaultRel && asset) {
+      items.push({
+        label: "Rename…",
+        onSelect: async () => {
+          const next = await promptApp({
+            title: "Rename asset",
+            initialValue: asset.name,
+            okLabel: "Rename",
+            validate: (value) => {
+              const clean = value.trim();
+              if (!clean) return "Asset name is required";
+              if (/[\\/]/.test(clean)) return "Use only a file name";
+              if (/\.md$/i.test(clean)) return "Use note actions for markdown notes";
+              return null;
+            },
+          });
+          if (!next || next === asset.name) return;
+          await window.zen.renameAsset(vaultRel, next);
+          await refreshAssets();
+        },
+      });
+      items.push({
+        label: "Move…",
+        onSelect: async () => {
+          const target = await promptApp({
+            title: "Move asset",
+            description: "Enter a vault-relative folder path. Leave empty to move to the vault root.",
+            initialValue: currentDir,
+            placeholder: "media/screenshots",
+            okLabel: "Move",
+            allowEmptySubmit: true,
+            validate: (value) => {
+              const clean = value.trim();
+              if (clean.includes("..")) return "Path cannot contain ..";
+              if (clean.split("/").includes(".zennotes")) {
+                return "Cannot move assets into internal ZenNotes files";
+              }
+              return null;
+            },
+          });
+          if (target === null || target === currentDir) return;
+          await window.zen.moveAsset(vaultRel, target);
+          await refreshAssets();
+        },
+      });
+      items.push({
+        label: "Duplicate",
+        onSelect: async () => {
+          await window.zen.duplicateAsset(vaultRel);
+          await refreshAssets();
+        },
+      });
+    }
+
+    items.push({
+      label: "Copy as Embed",
+      disabled: !vaultRel,
+      onSelect: async () => {
+        if (vaultRel) window.zen.clipboardWriteText(`![[${vaultRel}]]`);
+      },
+    });
+    items.push({
+      label: "Copy Path",
+      disabled: !vaultRel,
+      onSelect: async () => {
+        if (vaultRel) window.zen.clipboardWriteText(vaultRel);
+      },
+    });
+    items.push({
+      label: workspaceMode === "remote" ? "Copy Server Path" : "Copy Absolute Path",
+      disabled: !vaultRel || !abs,
+      onSelect: async () => {
+        if (abs) window.zen.clipboardWriteText(abs);
+      },
+    });
+    items.push(
       {
         label: "Open as Reference (This Note)",
-        disabled: !assetMenu.vaultRel,
+        disabled: !vaultRel,
         onSelect: async () => {
-          if (assetMenu.vaultRel) {
-            pinAssetReferenceForNote(notePath, assetMenu.vaultRel);
+          if (vaultRel) {
+            pinAssetReferenceForNote(notePath, vaultRel);
           }
         },
       },
       {
         label: "Open as Reference (Global)",
-        disabled: !assetMenu.vaultRel,
+        disabled: !vaultRel,
         onSelect: async () => {
-          if (assetMenu.vaultRel) pinAssetReference(assetMenu.vaultRel);
+          if (vaultRel) pinAssetReference(vaultRel);
         },
       },
-    ];
+    );
 
-    if (canRevealInFileManager && assetMenu.vaultRel) {
+    if (canRevealInFileManager && vaultRel) {
       items.push({
         label: "Reveal in File Manager",
         onSelect: async () => {
-          await window.zen.revealNote(assetMenu.vaultRel!);
+          await window.zen.revealNote(vaultRel);
+        },
+      });
+    }
+
+    if (canDeleteAssets && vaultRel && asset) {
+      items.push({ kind: "separator" });
+      items.push({
+        label: "Delete Asset…",
+        danger: true,
+        onSelect: async () => {
+          const ok = await confirmApp({
+            title: `Delete ${asset.name}?`,
+            description:
+              "This removes the file from the vault. Notes that embed it will keep the link, but the media will no longer render.",
+            confirmLabel: "Delete asset",
+            danger: true,
+          });
+          if (!ok) return;
+          await deleteAssetAction(vaultRel);
         },
       });
     }
@@ -743,11 +871,18 @@ export const Preview = memo(function Preview({
     return items;
   }, [
     assetMenu,
+    assetFiles,
+    canManageAssets,
+    canDeleteAssets,
     canRevealInFileManager,
+    deleteAssetAction,
     notePath,
     openNoteInTab,
     pinAssetReference,
     pinAssetReferenceForNote,
+    refreshAssets,
+    vault?.root,
+    workspaceMode,
   ]);
   const closeAssetMenu = useCallback(() => setAssetMenu(null), []);
 

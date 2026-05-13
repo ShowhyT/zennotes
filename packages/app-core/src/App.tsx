@@ -22,6 +22,7 @@ let editorModulePromise: Promise<typeof import('./components/Editor')> | null = 
 const EDITOR_MODULE_WARMUP_GRACE_MS = 40
 let searchPaletteModulePromise: Promise<typeof import('./components/SearchPalette')> | null = null
 const SEARCH_PALETTE_MODULE_WARMUP_DELAY_MS = 40
+const ASSET_UNDO_SHORTCUT_GRACE_MS = 30_000
 
 function loadEditorModule(): Promise<typeof import('./components/Editor')> {
   editorModulePromise ??= import('./components/Editor')
@@ -93,6 +94,24 @@ function scheduleSearchPaletteModuleWarmup(): () => void {
       window.cancelIdleCallback(idleId)
     }
   }
+}
+
+function isUndoShortcut(e: KeyboardEvent): boolean {
+  return (
+    e.key.toLowerCase() === 'z' &&
+    (e.metaKey || e.ctrlKey) &&
+    !e.shiftKey &&
+    !e.altKey
+  )
+}
+
+function isEditableShortcutTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false
+  return Boolean(
+    target.closest(
+      'input, textarea, select, [contenteditable="true"], .cm-editor'
+    )
+  )
 }
 
 const Editor = lazy(async () => {
@@ -407,6 +426,19 @@ function App(): JSX.Element {
     const handler = (e: KeyboardEvent): void => {
       const state = useStore.getState()
       const overrides = state.keymapOverrides
+
+      if (isUndoShortcut(e)) {
+        const assetUndoEntry = state.assetUndoStack.at(-1)
+        if (assetUndoEntry) {
+          const recentAssetDelete =
+            Date.now() - assetUndoEntry.createdAt <= ASSET_UNDO_SHORTCUT_GRACE_MS
+          if (recentAssetDelete || !isEditableShortcutTarget(e.target)) {
+            e.preventDefault()
+            void state.undoLastAssetAction()
+            return
+          }
+        }
+      }
 
       if (matchesShortcut(e, overrides, 'global.commandPalette')) {
         // ⇧⌘P — command palette

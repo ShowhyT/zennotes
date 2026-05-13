@@ -8,6 +8,7 @@ import { recordMainPerf } from './perf'
 import {
   DEFAULT_DAILY_NOTES_DIRECTORY,
   AssetMeta,
+  DeletedAsset,
   type FolderIconId,
   type PrimaryNotesLocation,
   type VaultSettings,
@@ -19,6 +20,7 @@ import {
   NoteContent,
   NoteFolder,
   NoteMeta,
+  PastedImageInput,
   LocalVaultEntry,
   VaultDemoTourResult,
   VaultTextSearchBackendPreference,
@@ -38,6 +40,7 @@ const PRIMARY_ATTACHMENTS_DIR = 'attachements'
 const LEGACY_ATTACHMENTS_DIRS = ['_assets']
 const ATTACHMENTS_DIRS = [PRIMARY_ATTACHMENTS_DIR, ...LEGACY_ATTACHMENTS_DIRS]
 const INTERNAL_VAULT_DIR = '.zennotes'
+const DELETED_ASSETS_DIR = 'deleted-assets'
 const VAULT_SETTINGS_FILE = 'vault.json'
 const NOTE_META_CACHE_FILE = 'note-meta-cache-v1.json'
 const NOTE_META_CACHE_VERSION = 1
@@ -62,6 +65,16 @@ const IMAGE_EXTENSIONS = new Set([
   '.svg',
   '.webp'
 ])
+const PASTED_IMAGE_MIME_EXTENSIONS: Record<string, string> = {
+  'image/apng': '.apng',
+  'image/avif': '.avif',
+  'image/gif': '.gif',
+  'image/jpeg': '.jpg',
+  'image/jpg': '.jpg',
+  'image/png': '.png',
+  'image/svg+xml': '.svg',
+  'image/webp': '.webp'
+}
 const PDF_EXTENSIONS = new Set(['.pdf'])
 const AUDIO_EXTENSIONS = new Set(['.aac', '.flac', '.m4a', '.mp3', '.ogg', '.wav'])
 const VIDEO_EXTENSIONS = new Set(['.m4v', '.mov', '.mp4', '.ogv', '.webm'])
@@ -1858,6 +1871,73 @@ function classifyImportedAsset(filename: string): ImportedAssetKind {
   return 'file'
 }
 
+async function assetMetaForPath(root: string, abs: string): Promise<AssetMeta> {
+  const stat = await fs.stat(abs)
+  const rel = toPosix(path.relative(root, abs))
+  return {
+    path: rel,
+    name: path.basename(abs),
+    kind: classifyImportedAsset(abs),
+    siblingOrder: 0,
+    size: stat.size,
+    updatedAt: stat.mtimeMs
+  }
+}
+
+async function assertAssetFile(root: string, rel: string): Promise<{ rel: string; abs: string }> {
+  const normalized = normalizeVaultRelativePath(rel)
+  if (!normalized) throw new Error('Asset path is required.')
+  if (normalized.split('/').includes(INTERNAL_VAULT_DIR)) {
+    throw new Error('Cannot modify internal ZenNotes files.')
+  }
+  if (path.extname(normalized).toLowerCase() === '.md') {
+    throw new Error('Use note actions to modify markdown notes.')
+  }
+  const abs = resolveSafe(root, normalized)
+  const info = await fs.stat(abs)
+  if (!info.isFile()) throw new Error('Asset path is not a file.')
+  return { rel: normalized, abs }
+}
+
+function cleanAssetFilename(name: string): string {
+  const raw = name.trim()
+  if (/[\\/]/.test(raw)) throw new Error('Use only a file name.')
+  const trimmed = path.basename(raw)
+  if (!trimmed || trimmed === '.' || trimmed === '..') throw new Error('Asset name is required.')
+  if (path.extname(trimmed).toLowerCase() === '.md') {
+    throw new Error('Use note actions for markdown notes.')
+  }
+  return trimmed
+}
+
+function cleanAssetTargetDir(root: string, targetDir: string): string {
+  const normalized = normalizeVaultRelativePath(targetDir).replace(/^\/+|\/+$/g, '')
+  if (!normalized) return root
+  if (normalized.split('/').includes(INTERNAL_VAULT_DIR)) {
+    throw new Error('Cannot move assets into internal ZenNotes files.')
+  }
+  return resolveSafe(root, normalized)
+}
+
+function cleanDeletedAssetPath(rel: string): string {
+  const normalized = normalizeVaultRelativePath(rel)
+  if (!normalized) throw new Error('Deleted asset path is required.')
+  if (normalized.split('/').includes(INTERNAL_VAULT_DIR)) {
+    throw new Error('Cannot restore internal ZenNotes files.')
+  }
+  if (path.extname(normalized).toLowerCase() === '.md') {
+    throw new Error('Use note actions to restore markdown notes.')
+  }
+  return normalized
+}
+
+function cleanDeletedAssetToken(token: string): string {
+  if (!/^[0-9a-f-]{36}$/i.test(token)) {
+    throw new Error('Deleted asset restore token is invalid.')
+  }
+  return token
+}
+
 function markdownForImportedAsset(
   relativeFromNote: string,
   filename: string,
@@ -1868,6 +1948,56 @@ function markdownForImportedAsset(
     return `![${path.basename(filename, path.extname(filename))}](${destination})`
   }
   return `[${filename}](${destination})`
+}
+
+function padPastedImageDatePart(value: number): string {
+  return String(value).padStart(2, '0')
+}
+
+function pastedImageTimestamp(now: Date): string {
+  const date = [
+    now.getFullYear(),
+    padPastedImageDatePart(now.getMonth() + 1),
+    padPastedImageDatePart(now.getDate())
+  ].join('-')
+  const time = [
+    padPastedImageDatePart(now.getHours()),
+    padPastedImageDatePart(now.getMinutes()),
+    padPastedImageDatePart(now.getSeconds())
+  ].join('')
+  return `${date} ${time}`
+}
+
+function pastedImageExtension(input: Pick<PastedImageInput, 'mimeType' | 'suggestedName'>): string {
+  const suggestedExt = path.extname(input.suggestedName ?? '').toLowerCase()
+  if (IMAGE_EXTENSIONS.has(suggestedExt)) return suggestedExt
+
+  const mimeExt = PASTED_IMAGE_MIME_EXTENSIONS[input.mimeType.toLowerCase()]
+  if (mimeExt) return mimeExt
+  if (input.mimeType.toLowerCase().startsWith('image/')) return '.png'
+  throw new Error('Clipboard item is not an image.')
+}
+
+function pastedImageFilename(input: Pick<PastedImageInput, 'mimeType' | 'suggestedName'>, now: Date): string {
+  const ext = pastedImageExtension(input)
+  const rawName = path.basename(input.suggestedName ?? '')
+  const nameExt = path.extname(rawName)
+  const rawBase = nameExt ? path.basename(rawName, nameExt) : rawName
+  const base = rawBase
+    .replace(/[\\/:%*?"<>|\[\]#^]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const fallbackBase = `Pasted Image ${pastedImageTimestamp(now)}`
+  const finalBase = base && base !== '.' && base !== '..' ? base : fallbackBase
+  return `${finalBase}${ext}`
+}
+
+function pastedImageBuffer(data: PastedImageInput['data']): Buffer {
+  if (data instanceof ArrayBuffer) return Buffer.from(data)
+  if (ArrayBuffer.isView(data)) {
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength)
+  }
+  throw new Error('Clipboard image data is invalid.')
 }
 
 export async function createNote(
@@ -1987,6 +2117,86 @@ export async function deleteNote(root: string, rel: string): Promise<void> {
   await removeNoteComments(root, rel)
   invalidateNoteMetaCache(root, rel)
   invalidateVaultTextSearchCache(root)
+}
+
+export async function renameAsset(
+  root: string,
+  rel: string,
+  nextName: string
+): Promise<AssetMeta> {
+  const source = await assertAssetFile(root, rel)
+  const cleanName = cleanAssetFilename(nextName)
+  const destAbs = path.join(path.dirname(source.abs), cleanName)
+  if (destAbs !== source.abs) {
+    try {
+      await fs.access(destAbs)
+      const [srcStat, dstStat] = await Promise.all([fs.stat(source.abs), fs.stat(destAbs)])
+      if (srcStat.ino !== dstStat.ino) {
+        throw new Error(`An asset named "${cleanName}" already exists in this folder.`)
+      }
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
+    }
+    if (source.abs.toLowerCase() === destAbs.toLowerCase() && source.abs !== destAbs) {
+      const tmp = `${source.abs}_rename_tmp_${Date.now()}`
+      await fs.rename(source.abs, tmp)
+      await fs.rename(tmp, destAbs)
+    } else {
+      await fs.rename(source.abs, destAbs)
+    }
+  }
+  return await assetMetaForPath(root, destAbs)
+}
+
+export async function moveAsset(
+  root: string,
+  rel: string,
+  targetDir: string
+): Promise<AssetMeta> {
+  const source = await assertAssetFile(root, rel)
+  const destDir = cleanAssetTargetDir(root, targetDir)
+  await fs.mkdir(destDir, { recursive: true })
+  if (path.resolve(destDir) === path.dirname(source.abs)) return await assetMetaForPath(root, source.abs)
+  const finalName = await uniqueFilename(destDir, path.basename(source.abs))
+  const destAbs = path.join(destDir, finalName)
+  if (destAbs !== source.abs) await fs.rename(source.abs, destAbs)
+  return await assetMetaForPath(root, destAbs)
+}
+
+export async function duplicateAsset(root: string, rel: string): Promise<AssetMeta> {
+  const source = await assertAssetFile(root, rel)
+  const ext = path.extname(source.abs)
+  const base = path.basename(source.abs, ext)
+  const finalName = await uniqueFilename(path.dirname(source.abs), `${base} copy${ext}`)
+  const destAbs = path.join(path.dirname(source.abs), finalName)
+  await fs.copyFile(source.abs, destAbs)
+  return await assetMetaForPath(root, destAbs)
+}
+
+export async function deleteAsset(root: string, rel: string): Promise<DeletedAsset> {
+  const source = await assertAssetFile(root, rel)
+  const undoToken = randomUUID()
+  const trashDir = resolveSafe(root, `${INTERNAL_VAULT_DIR}/${DELETED_ASSETS_DIR}/${undoToken}`)
+  await fs.mkdir(trashDir, { recursive: true })
+  const name = path.basename(source.abs)
+  await fs.rename(source.abs, path.join(trashDir, name))
+  return { path: source.rel, name, undoToken }
+}
+
+export async function restoreDeletedAsset(root: string, deleted: DeletedAsset): Promise<AssetMeta> {
+  const targetRel = cleanDeletedAssetPath(deleted.path)
+  const name = cleanAssetFilename(deleted.name)
+  const undoToken = cleanDeletedAssetToken(deleted.undoToken)
+  const trashDir = resolveSafe(root, `${INTERNAL_VAULT_DIR}/${DELETED_ASSETS_DIR}/${undoToken}`)
+  const sourceAbs = path.join(trashDir, name)
+  const targetAbs = resolveSafe(root, targetRel)
+  const targetDir = path.dirname(targetAbs)
+  await fs.mkdir(targetDir, { recursive: true })
+  const finalName = await uniqueFilename(targetDir, path.basename(targetAbs))
+  const finalAbs = path.join(targetDir, finalName)
+  await fs.rename(sourceAbs, finalAbs)
+  await fs.rm(trashDir, { recursive: true, force: true })
+  return await assetMetaForPath(root, finalAbs)
 }
 
 /* ---------- Folder operations ---------------------------------------- */
@@ -2360,6 +2570,29 @@ export async function importFiles(
   }
 
   return imported
+}
+
+export async function importPastedImage(
+  root: string,
+  input: PastedImageInput,
+  now = new Date()
+): Promise<ImportedAsset> {
+  await fs.mkdir(root, { recursive: true })
+
+  const bytes = pastedImageBuffer(input.data)
+  if (bytes.byteLength === 0) throw new Error('Clipboard image is empty.')
+
+  const finalName = await uniqueFilename(root, pastedImageFilename(input, now))
+  const destAbs = path.join(root, finalName)
+  await fs.writeFile(destAbs, bytes)
+
+  const vaultRelPath = toPosix(path.relative(root, destAbs))
+  return {
+    name: finalName,
+    path: vaultRelPath,
+    markdown: `![[${vaultRelPath}]]`,
+    kind: 'image'
+  }
 }
 
 /**

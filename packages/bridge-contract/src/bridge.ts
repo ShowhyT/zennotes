@@ -2,6 +2,7 @@ import type {
   AppUpdateState,
   AssetMeta,
   CliInstallStatus,
+  DeletedAsset,
   FolderEntry,
   ImportedAsset,
   LocalVaultEntry,
@@ -12,6 +13,7 @@ import type {
   NoteContent,
   NoteFolder,
   NoteMeta,
+  PastedImageInput,
   RaycastExtensionStatus,
   DirectoryBrowseResult,
   RemoteWorkspaceInfo,
@@ -132,6 +134,12 @@ export interface ZenBridge {
   revealNote(relPath: string): Promise<void>
   moveNote(relPath: string, targetFolder: NoteFolder, targetSubpath: string): Promise<NoteMeta>
   importFilesToNote(notePath: string, sourcePaths: string[]): Promise<ImportedAsset[]>
+  importPastedImage(input: PastedImageInput): Promise<ImportedAsset>
+  renameAsset(relPath: string, nextName: string): Promise<AssetMeta>
+  moveAsset(relPath: string, targetDir: string): Promise<AssetMeta>
+  duplicateAsset(relPath: string): Promise<AssetMeta>
+  deleteAsset(relPath: string): Promise<DeletedAsset>
+  restoreDeletedAsset(asset: DeletedAsset): Promise<AssetMeta>
   createFolder(folder: NoteFolder, subpath: string): Promise<void>
   renameFolder(folder: NoteFolder, oldSubpath: string, newSubpath: string): Promise<string>
   deleteFolder(folder: NoteFolder, subpath: string): Promise<void>

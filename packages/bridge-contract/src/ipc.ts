@@ -44,6 +44,12 @@ export const IPC = {
   VAULT_REVEAL_NOTE: 'vault:reveal-note',
   VAULT_MOVE_NOTE: 'vault:move-note',
   VAULT_IMPORT_FILES: 'vault:import-files',
+  VAULT_IMPORT_PASTED_IMAGE: 'vault:import-pasted-image',
+  VAULT_RENAME_ASSET: 'vault:rename-asset',
+  VAULT_MOVE_ASSET: 'vault:move-asset',
+  VAULT_DUPLICATE_ASSET: 'vault:duplicate-asset',
+  VAULT_DELETE_ASSET: 'vault:delete-asset',
+  VAULT_RESTORE_DELETED_ASSET: 'vault:restore-deleted-asset',
   VAULT_CREATE_FOLDER: 'vault:create-folder',
   VAULT_RENAME_FOLDER: 'vault:rename-folder',
   VAULT_DELETE_FOLDER: 'vault:delete-folder',
@@ -356,6 +362,15 @@ export interface AssetMeta {
   updatedAt: number
 }
 
+export interface DeletedAsset {
+  /** Original vault-relative path before the asset was removed. */
+  path: string
+  /** Original file name. */
+  name: string
+  /** Opaque restore token returned by the desktop bridge. */
+  undoToken: string
+}
+
 export interface ImportedAsset {
   /** File name stored under the vault-root attachments directory. */
   name: string
@@ -364,6 +379,15 @@ export interface ImportedAsset {
   /** Markdown snippet to insert into the note. */
   markdown: string
   kind: ImportedAssetKind
+}
+
+export interface PastedImageInput {
+  /** Raw image bytes copied from the clipboard. */
+  data: ArrayBuffer | Uint8Array
+  /** Browser-provided MIME type, for example `image/png`. */
+  mimeType: string
+  /** Optional clipboard/file name, when the source provides one. */
+  suggestedName?: string | null
 }
 
 export interface VaultInfo {

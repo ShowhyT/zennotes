@@ -5,13 +5,19 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   absolutePath,
   appendToNote,
+  deleteAsset,
+  duplicateAsset,
   ensureVaultLayout,
   getVaultSettings,
+  importPastedImage,
   invalidateNoteMetaCache,
   listNotes,
   listFolders,
+  moveAsset,
   rememberLocalVault,
+  renameAsset,
   renameFolder,
+  restoreDeletedAsset,
   searchVaultText,
   searchVaultTextCapabilities,
   setVaultSettings,
@@ -107,6 +113,102 @@ describe('appendToNote', () => {
 
     const next = await readFile(path.join(root, rel), 'utf8')
     expect(next).toBe(original)
+  })
+})
+
+describe('importPastedImage', () => {
+  it('writes clipboard image bytes to the vault root and returns a wiki embed', async () => {
+    const root = await makeTempDir('zennotes-paste-image-')
+    await ensureVaultLayout(root)
+
+    const imported = await importPastedImage(
+      root,
+      {
+        data: Uint8Array.from([137, 80, 78, 71]).buffer,
+        mimeType: 'image/png',
+        suggestedName: 'Screenshot 2026-05-13.png'
+      },
+      new Date(2026, 4, 13, 15, 4, 5)
+    )
+
+    expect(imported).toEqual({
+      name: 'Screenshot 2026-05-13.png',
+      path: 'Screenshot 2026-05-13.png',
+      markdown: '![[Screenshot 2026-05-13.png]]',
+      kind: 'image'
+    })
+    await expect(readFile(path.join(root, 'Screenshot 2026-05-13.png'))).resolves.toEqual(
+      Buffer.from([137, 80, 78, 71])
+    )
+  })
+
+  it('generates a unique root filename when the clipboard has no useful name', async () => {
+    const root = await makeTempDir('zennotes-paste-image-name-')
+    await ensureVaultLayout(root)
+    await writeFile(path.join(root, 'Pasted Image 2026-05-13 150405.webp'), 'existing', 'utf8')
+
+    const imported = await importPastedImage(
+      root,
+      {
+        data: Uint8Array.from([1, 2, 3]).buffer,
+        mimeType: 'image/webp'
+      },
+      new Date(2026, 4, 13, 15, 4, 5)
+    )
+
+    expect(imported.name).toBe('Pasted Image 2026-05-13 150405 2.webp')
+    expect(imported.path).toBe('Pasted Image 2026-05-13 150405 2.webp')
+    expect(imported.markdown).toBe('![[Pasted Image 2026-05-13 150405 2.webp]]')
+    await expect(readFile(path.join(root, imported.name))).resolves.toEqual(Buffer.from([1, 2, 3]))
+  })
+})
+
+describe('deleteAsset', () => {
+  it('renames, moves, and duplicates non-markdown assets', async () => {
+    const root = await makeTempDir('zennotes-asset-actions-')
+    await ensureVaultLayout(root)
+    await writeFile(path.join(root, 'Image.png'), 'image-bytes', 'utf8')
+
+    const renamed = await renameAsset(root, 'Image.png', 'Renamed.png')
+    expect(renamed.path).toBe('Renamed.png')
+    await expect(readFile(path.join(root, 'Renamed.png'), 'utf8')).resolves.toBe('image-bytes')
+
+    const moved = await moveAsset(root, renamed.path, 'media/screenshots')
+    expect(moved.path).toBe('media/screenshots/Renamed.png')
+    await expect(readFile(path.join(root, moved.path), 'utf8')).resolves.toBe('image-bytes')
+
+    const duplicated = await duplicateAsset(root, moved.path)
+    expect(duplicated.path).toBe('media/screenshots/Renamed copy.png')
+    await expect(readFile(path.join(root, duplicated.path), 'utf8')).resolves.toBe('image-bytes')
+  })
+
+  it('removes a non-markdown asset inside the vault and can restore it', async () => {
+    const root = await makeTempDir('zennotes-delete-asset-')
+    await ensureVaultLayout(root)
+    const rel = 'Screenshot.png'
+    await writeFile(path.join(root, rel), 'image-bytes', 'utf8')
+
+    const deleted = await deleteAsset(root, rel)
+
+    expect(deleted).toMatchObject({ path: rel, name: 'Screenshot.png' })
+    await expect(readFile(path.join(root, rel), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT'
+    })
+
+    const restored = await restoreDeletedAsset(root, deleted)
+
+    expect(restored.path).toBe(rel)
+    await expect(readFile(path.join(root, rel), 'utf8')).resolves.toBe('image-bytes')
+  })
+
+  it('does not delete markdown notes through the asset path', async () => {
+    const root = await makeTempDir('zennotes-delete-note-as-asset-')
+    await ensureVaultLayout(root)
+    const rel = 'inbox/Keep.md'
+    await writeFile(path.join(root, rel), '# Keep\n', 'utf8')
+
+    await expect(deleteAsset(root, rel)).rejects.toThrow(/note actions/i)
+    await expect(readFile(path.join(root, rel), 'utf8')).resolves.toBe('# Keep\n')
   })
 })
 

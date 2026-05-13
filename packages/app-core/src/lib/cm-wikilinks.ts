@@ -1,6 +1,6 @@
 import type { Completion, CompletionContext, CompletionResult } from '@codemirror/autocomplete'
 import type { EditorView } from '@codemirror/view'
-import type { NoteMeta } from '@shared/ipc'
+import type { AssetMeta, NoteMeta } from '@shared/ipc'
 import { useStore } from '../store'
 import { isPrimaryNotesAtRoot, noteFolderSubpath } from './vault-layout'
 
@@ -33,11 +33,50 @@ function folderLabelFor(note: NoteMeta): string {
   return subpath ? `${subpath}/` : `${note.folder}/`
 }
 
+function folderLabelForAsset(asset: AssetMeta): string {
+  const parent = asset.path.split('/').slice(0, -1).join('/')
+  const kind = asset.kind.toUpperCase()
+  return parent ? `${kind} ${parent}/` : kind
+}
+
 function queryTokens(query: string): string[] {
   return normalize(query)
     .split(/[\s/]+/)
     .map((token) => token.trim())
     .filter(Boolean)
+}
+
+function matchesAsset(asset: AssetMeta, query: string): boolean {
+  const q = normalize(query)
+  if (!q) return true
+
+  const name = normalize(asset.name)
+  const path = normalize(asset.path)
+  const compactName = compact(asset.name)
+  const compactPath = compact(asset.path)
+  const compactQuery = compact(query)
+
+  if (name.includes(q) || path.includes(q)) return true
+
+  if (compactQuery && (compactName.includes(compactQuery) || compactPath.includes(compactQuery))) {
+    return true
+  }
+
+  const tokens = queryTokens(query)
+  if (tokens.length > 1) {
+    const nameWords = name.split(/[\s._-]+/).filter(Boolean)
+    const pathParts = path.split('/').flatMap((part) => part.split(/[\s._-]+/)).filter(Boolean)
+    return tokens.every(
+      (token) =>
+        nameWords.some((word) => word.startsWith(token)) ||
+        pathParts.some((part) => part.startsWith(token))
+    )
+  }
+
+  return compactQuery.length >= 2 && (
+    initials(asset.name).startsWith(compactQuery) ||
+    initials(asset.path).startsWith(compactQuery)
+  )
 }
 
 function matchesNote(note: NoteMeta, query: string): boolean {
@@ -89,6 +128,41 @@ function noteTargetFor(note: NoteMeta, notes: NoteMeta[]): string {
   return rel
 }
 
+function scoreAsset(asset: AssetMeta, query: string, activePath: string | null): number {
+  const name = normalize(asset.name)
+  const path = normalize(asset.path)
+  const q = normalize(query)
+  let score = 4
+
+  if (q) {
+    if (name === q) score -= 112
+    else if (name.startsWith(q)) score -= 84
+    else if (name.split(/[\s._-]+/).some((word) => word.startsWith(q))) score -= 72
+    else if (name.includes(q)) score -= 56
+    else if (path.endsWith(`/${q}`) || path === q) score -= 42
+    else if (path.split('/').some((part) => part.startsWith(q))) score -= 34
+    else if (path.includes(q)) score -= 18
+    else {
+      const compactQuery = compact(query)
+      const compactName = compact(asset.name)
+      const compactPath = compact(asset.path)
+      if (compactQuery && compactName.includes(compactQuery)) score -= 38
+      else if (compactQuery && compactPath.includes(compactQuery)) score -= 22
+      else if (compactQuery.length >= 2 && initials(asset.name).startsWith(compactQuery)) score -= 14
+      else if (compactQuery.length >= 2 && initials(asset.path).startsWith(compactQuery)) score -= 7
+      else score += 200
+    }
+  }
+
+  if (activePath) {
+    const activeParent = activePath.split('/').slice(0, -1).join('/')
+    const assetParent = asset.path.split('/').slice(0, -1).join('/')
+    if (assetParent === activeParent) score -= 12
+  }
+
+  return score
+}
+
 function scoreNote(note: NoteMeta, query: string, activePath: string | null): number {
   const title = normalize(note.title)
   const path = normalize(stripMdExtension(note.path))
@@ -126,7 +200,9 @@ function scoreNote(note: NoteMeta, query: string, activePath: string | null): nu
 }
 
 function wikilinkMatch(context: CompletionContext): {
+  openFrom: number
   from: number
+  hasBangPrefix: boolean
   query: string
 } | null {
   const { state, pos } = context
@@ -140,7 +216,18 @@ function wikilinkMatch(context: CompletionContext): {
   if (inside.includes('|')) return null
   if (inside.includes('#') || inside.includes('^')) return null
 
-  return { from: line.from + openIndex + 2, query: inside }
+  return {
+    openFrom: line.from + openIndex,
+    from: line.from + openIndex + 2,
+    hasBangPrefix: openIndex > 0 && before[openIndex - 1] === '!',
+    query: inside
+  }
+}
+
+type WikilinkCompletion = Completion & {
+  _kind: 'wikilink'
+  _target: string
+  _subtitle: string
 }
 
 export function wikilinkSource(context: CompletionContext): CompletionResult | null {
@@ -152,19 +239,62 @@ export function wikilinkSource(context: CompletionContext): CompletionResult | n
   const notes = state.notes.filter(
     (note) => note.folder !== 'trash' && note.path !== activePath
   )
-  const ranked = notes
+  const rankedNotes = notes
     .filter((note) => matchesNote(note, match.query))
     .map((note) => ({
+      kind: 'note' as const,
       note,
       score: scoreNote(note, match.query, activePath)
     }))
+
+  const rankedAssets = state.assetFiles
+    .filter((asset) => matchesAsset(asset, match.query))
+    .map((asset) => ({
+      kind: 'asset' as const,
+      asset,
+      score: scoreAsset(asset, match.query, activePath)
+    }))
+
+  const ranked = [...rankedNotes, ...rankedAssets]
     .sort((a, b) => {
       if (a.score !== b.score) return a.score - b.score
-      return a.note.title.localeCompare(b.note.title)
+      const aLabel = a.kind === 'note' ? a.note.title : a.asset.name
+      const bLabel = b.kind === 'note' ? b.note.title : b.asset.name
+      return aLabel.localeCompare(bLabel)
     })
     .slice(0, 24)
 
-  const options: Completion[] = ranked.map(({ note }) => {
+  const options: Completion[] = ranked.map((candidate) => {
+    if (candidate.kind === 'asset') {
+      const target = candidate.asset.path
+      const subtitle = folderLabelForAsset(candidate.asset)
+      return {
+        label: candidate.asset.name,
+        detail: subtitle,
+        type: candidate.asset.kind === 'image' ? 'image' : 'file',
+        _kind: 'wikilink',
+        _target: target,
+        _subtitle: subtitle,
+        apply: (view: EditorView, _completion: Completion, from: number, to: number) => {
+          const existingClose = view.state.doc.sliceString(to, to + 2) === ']]'
+          const insert = `${target}${existingClose ? '' : ']]'}`
+          const addBangPrefix = !match.hasBangPrefix
+          view.dispatch({
+            changes: addBangPrefix
+              ? [
+                  { from: match.openFrom, to: match.openFrom, insert: '!' },
+                  { from, to, insert }
+                ]
+              : { from, to, insert },
+            selection: {
+              anchor: from + target.length + (existingClose ? 0 : 2) + (addBangPrefix ? 1 : 0)
+            }
+          })
+        }
+      } as WikilinkCompletion
+    }
+
+    const note = candidate.note
     const target = noteTargetFor(note, notes)
     return {
       label: note.title,
@@ -182,11 +312,7 @@ export function wikilinkSource(context: CompletionContext): CompletionResult | n
           selection: { anchor }
         })
       }
-    } as Completion & {
-      _kind: 'wikilink'
-      _target: string
-      _subtitle: string
-    }
+    } as WikilinkCompletion
   })
 
   return {

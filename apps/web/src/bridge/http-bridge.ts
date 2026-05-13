@@ -25,6 +25,7 @@ import type {
   AppUpdateState,
   AssetMeta,
   CliInstallStatus,
+  DeletedAsset,
   DirectoryBrowseResult,
   FolderEntry,
   ImportedAsset,
@@ -34,6 +35,7 @@ import type {
   NoteContent,
   NoteFolder,
   NoteMeta,
+  PastedImageInput,
   RaycastExtensionStatus,
   RemoteWorkspaceInfo,
   RemoteWorkspaceProfile,
@@ -564,6 +566,30 @@ async function importFilesToNote(
   return results
 }
 
+async function importPastedImage(_input: PastedImageInput): Promise<ImportedAsset> {
+  throw new Error('Clipboard image paste is only available in the desktop app right now.')
+}
+
+async function renameAsset(_relPath: string, _nextName: string): Promise<AssetMeta> {
+  throw new Error('Asset rename is only available in the desktop app right now.')
+}
+
+async function moveAsset(_relPath: string, _targetDir: string): Promise<AssetMeta> {
+  throw new Error('Asset move is only available in the desktop app right now.')
+}
+
+async function duplicateAsset(_relPath: string): Promise<AssetMeta> {
+  throw new Error('Asset duplication is only available in the desktop app right now.')
+}
+
+async function deleteAsset(_relPath: string): Promise<DeletedAsset> {
+  throw new Error('Asset deletion is only available in the desktop app right now.')
+}
+
+async function restoreDeletedAsset(_asset: DeletedAsset): Promise<AssetMeta> {
+  throw new Error('Asset restore is only available in the desktop app right now.')
+}
+
 // Bucket for File objects "pretending" to be filesystem paths. The
 // renderer expects `getPathForFile` to return a string it can later
 // pass to `importFilesToNote`. On the web, we mint a synthetic token
@@ -1009,6 +1035,12 @@ export const httpBridge: ZenBridge = {
   revealNote,
   moveNote,
   importFilesToNote,
+  importPastedImage,
+  renameAsset,
+  moveAsset,
+  duplicateAsset,
+  deleteAsset,
+  restoreDeletedAsset,
   createFolder,
   renameFolder,
   deleteFolder,

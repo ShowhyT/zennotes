@@ -2239,6 +2239,7 @@ textarea,
   display: block;
   width: 100%;
   max-width: min(100%, 980px);
+  margin: 0.75rem 0 1rem;
 }
 
 /* --- PDF embed widget (CodeMirror live preview) ---------------------- */

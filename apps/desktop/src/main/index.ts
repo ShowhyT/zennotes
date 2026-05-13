@@ -24,6 +24,8 @@ import type {
   NoteMeta,
   NoteCommentInput,
   NoteFolder,
+  DeletedAsset,
+  PastedImageInput,
   LocalVaultEntry,
   RemoteWorkspaceInfo,
   RemoteWorkspaceProfile,
@@ -41,9 +43,11 @@ import {
   archiveNote,
   createFolder,
   createNote,
+  deleteAsset,
   DEFAULT_QUICK_CAPTURE_HOTKEY,
   deleteFolder,
   deleteNote,
+  duplicateAsset,
   duplicateFolder,
   duplicateNote,
   emptyTrash,
@@ -53,6 +57,7 @@ import {
   getVaultSettings,
   hasAssetsDir,
   importFiles,
+  importPastedImage,
   invalidateNoteMetaCache,
   invalidateVaultTextSearchCache,
   listAssets,
@@ -60,12 +65,15 @@ import {
   listNotes,
   loadConfig,
   moveNote,
+  moveAsset,
   moveToTrash,
   readNoteComments,
   readNote,
   renameFolder,
   renameNote,
+  renameAsset,
   removeDemoTour,
+  restoreDeletedAsset,
   restoreFromTrash,
   searchVaultTextCapabilities,
   searchVaultText,
@@ -1960,6 +1968,54 @@ function registerIpc(): void {
       return await importFiles(v.root, notePath, sourcePaths)
     }
   )
+
+  handle(IPC.VAULT_IMPORT_PASTED_IMAGE, async (_e, input: PastedImageInput) => {
+    if (isRemoteWorkspaceActive()) {
+      throw new Error('Clipboard image paste is only available for local vaults right now.')
+    }
+    const v = requireVault()
+    return await importPastedImage(v.root, input)
+  })
+
+  handle(IPC.VAULT_RENAME_ASSET, async (_e, relPath: string, nextName: string) => {
+    if (isRemoteWorkspaceActive()) {
+      throw new Error('Asset rename is only available for local vaults right now.')
+    }
+    const v = requireVault()
+    return await renameAsset(v.root, relPath, nextName)
+  })
+
+  handle(IPC.VAULT_MOVE_ASSET, async (_e, relPath: string, targetDir: string) => {
+    if (isRemoteWorkspaceActive()) {
+      throw new Error('Asset move is only available for local vaults right now.')
+    }
+    const v = requireVault()
+    return await moveAsset(v.root, relPath, targetDir)
+  })
+
+  handle(IPC.VAULT_DUPLICATE_ASSET, async (_e, relPath: string) => {
+    if (isRemoteWorkspaceActive()) {
+      throw new Error('Asset duplication is only available for local vaults right now.')
+    }
+    const v = requireVault()
+    return await duplicateAsset(v.root, relPath)
+  })
+
+  handle(IPC.VAULT_DELETE_ASSET, async (_e, relPath: string) => {
+    if (isRemoteWorkspaceActive()) {
+      throw new Error('Asset deletion is only available for local vaults right now.')
+    }
+    const v = requireVault()
+    return await deleteAsset(v.root, relPath)
+  })
+
+  handle(IPC.VAULT_RESTORE_DELETED_ASSET, async (_e, deleted: DeletedAsset) => {
+    if (isRemoteWorkspaceActive()) {
+      throw new Error('Asset restore is only available for local vaults right now.')
+    }
+    const v = requireVault()
+    return await restoreDeletedAsset(v.root, deleted)
+  })
 
   handle(
     IPC.VAULT_CREATE_FOLDER,

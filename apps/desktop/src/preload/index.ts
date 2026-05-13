@@ -11,6 +11,7 @@ import type {
   AppUpdateState,
   AssetMeta,
   CliInstallStatus,
+  DeletedAsset,
   DirectoryBrowseResult,
   FolderEntry,
   ImportedAsset,
@@ -22,6 +23,7 @@ import type {
   NoteContent,
   NoteFolder,
   NoteMeta,
+  PastedImageInput,
   RaycastExtensionStatus,
   RemoteWorkspaceInfo,
   RemoteWorkspaceProfile,
@@ -307,6 +309,18 @@ const api: ZenBridge = {
     ipcRenderer.invoke(IPC.VAULT_MOVE_NOTE, relPath, targetFolder, targetSubpath),
   importFilesToNote: (notePath: string, sourcePaths: string[]): Promise<ImportedAsset[]> =>
     ipcRenderer.invoke(IPC.VAULT_IMPORT_FILES, notePath, sourcePaths),
+  importPastedImage: (input: PastedImageInput): Promise<ImportedAsset> =>
+    ipcRenderer.invoke(IPC.VAULT_IMPORT_PASTED_IMAGE, input),
+  renameAsset: (relPath: string, nextName: string): Promise<AssetMeta> =>
+    ipcRenderer.invoke(IPC.VAULT_RENAME_ASSET, relPath, nextName),
+  moveAsset: (relPath: string, targetDir: string): Promise<AssetMeta> =>
+    ipcRenderer.invoke(IPC.VAULT_MOVE_ASSET, relPath, targetDir),
+  duplicateAsset: (relPath: string): Promise<AssetMeta> =>
+    ipcRenderer.invoke(IPC.VAULT_DUPLICATE_ASSET, relPath),
+  deleteAsset: (relPath: string): Promise<DeletedAsset> =>
+    ipcRenderer.invoke(IPC.VAULT_DELETE_ASSET, relPath),
+  restoreDeletedAsset: (asset: DeletedAsset): Promise<AssetMeta> =>
+    ipcRenderer.invoke(IPC.VAULT_RESTORE_DELETED_ASSET, asset),
   createFolder: (folder: NoteFolder, subpath: string): Promise<void> =>
     ipcRenderer.invoke(IPC.VAULT_CREATE_FOLDER, folder, subpath),
   renameFolder: (folder: NoteFolder, oldSubpath: string, newSubpath: string): Promise<string> =>

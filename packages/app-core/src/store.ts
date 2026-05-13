@@ -3,6 +3,7 @@ import type { EditorView } from '@codemirror/view'
 import { DEFAULT_VAULT_SETTINGS } from '@shared/ipc'
 import type {
   AssetMeta,
+  DeletedAsset,
   FolderEntry,
   LocalVaultEntry,
   NoteComment,
@@ -172,6 +173,16 @@ async function refreshVaultIndexes(): Promise<void> {
   await Promise.all([state.refreshNotes(), state.refreshAssets()])
 }
 
+function isDeletedAssetRecord(value: unknown): value is DeletedAsset {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Record<string, unknown>
+  return (
+    typeof candidate.path === 'string' &&
+    typeof candidate.name === 'string' &&
+    typeof candidate.undoToken === 'string'
+  )
+}
+
 interface Prefs {
   vimMode: boolean
   keymapOverrides: KeymapOverrides
@@ -280,9 +291,12 @@ export type TaskMutation =
   | { kind: 'set-priority'; priority: TaskLinePriority | null }
   | { kind: 'set-due'; due: string | null }
 
+type AssetUndoEntry = { kind: 'delete-asset'; deleted: DeletedAsset; createdAt: number }
+
 const VALID_TASKS_VIEW_MODES: TasksViewMode[] = ['list', 'calendar', 'kanban']
 const VALID_KANBAN_GROUP_BYS: KanbanGroupBy[] = ['status', 'priority', 'folder']
 const MAX_KANBAN_COLUMN_TITLE_LENGTH = 48
+const MAX_ASSET_UNDO_STACK = 20
 
 function normalizeKanbanColumnTitle(title: string): string | null {
   const normalized = title.trim().replace(/\s+/g, ' ').slice(0, MAX_KANBAN_COLUMN_TITLE_LENGTH)
@@ -1247,6 +1261,7 @@ interface Store {
   notes: NoteMeta[]
   folders: FolderEntry[]
   assetFiles: AssetMeta[]
+  assetUndoStack: AssetUndoEntry[]
   hasAssetsDir: boolean
   view: View
   selectedPath: string | null
@@ -1470,6 +1485,8 @@ interface Store {
   applyChange: (ev: VaultChangeEvent) => Promise<void>
   refreshNotes: () => Promise<void>
   refreshAssets: () => Promise<void>
+  deleteAsset: (relPath: string) => Promise<void>
+  undoLastAssetAction: () => Promise<boolean>
   updateActiveBody: (body: string) => void
   persistActive: () => Promise<void>
   formatActiveNote: () => Promise<void>
@@ -2288,6 +2305,7 @@ export const useStore = create<Store>((set, get) => {
   notes: [],
   folders: [],
   assetFiles: [],
+  assetUndoStack: [],
   hasAssetsDir: false,
   view: { kind: 'folder', folder: 'inbox', subpath: '' },
   selectedPath: null,
@@ -2382,10 +2400,11 @@ export const useStore = create<Store>((set, get) => {
 
   setVault: (v) =>
     set((s) => {
-      if (s.vault?.root !== v?.root || s.vault?.name !== v?.name) {
+      const vaultChanged = s.vault?.root !== v?.root || s.vault?.name !== v?.name
+      if (vaultChanged) {
         clearNoteContentReadCaches()
       }
-      return { vault: v }
+      return vaultChanged ? { vault: v, assetUndoStack: [] } : { vault: v }
     }),
   setVaultSettings: async (next) => {
     try {
@@ -2907,6 +2926,49 @@ export const useStore = create<Store>((set, get) => {
       })
     } catch (err) {
       console.error('refresh assets failed', err)
+    }
+  },
+
+  deleteAsset: async (relPath) => {
+    if (typeof window.zen.deleteAsset !== 'function') {
+      window.alert('Asset deletion is not available until the app is restarted.')
+      return
+    }
+    try {
+      const deleted = await window.zen.deleteAsset(relPath)
+      if (isDeletedAssetRecord(deleted) && typeof window.zen.restoreDeletedAsset === 'function') {
+        const entry: AssetUndoEntry = { kind: 'delete-asset', deleted, createdAt: Date.now() }
+        set((s) => ({
+          assetUndoStack: [...s.assetUndoStack, entry].slice(-MAX_ASSET_UNDO_STACK)
+        }))
+      }
+      await get().refreshAssets()
+    } catch (err) {
+      console.error('delete asset failed', err)
+      window.alert(err instanceof Error ? err.message : String(err))
+    }
+  },
+
+  undoLastAssetAction: async () => {
+    const entry = get().assetUndoStack.at(-1)
+    if (!entry) return false
+    if (typeof window.zen.restoreDeletedAsset !== 'function') {
+      window.alert('Asset undo is not available until the app is restarted.')
+      return false
+    }
+
+    set((s) => ({ assetUndoStack: s.assetUndoStack.slice(0, -1) }))
+    try {
+      await window.zen.restoreDeletedAsset(entry.deleted)
+      await get().refreshAssets()
+      return true
+    } catch (err) {
+      set((s) => ({
+        assetUndoStack: [...s.assetUndoStack, entry].slice(-MAX_ASSET_UNDO_STACK)
+      }))
+      console.error('undo asset action failed', err)
+      window.alert(err instanceof Error ? err.message : String(err))
+      return false
     }
   },
 
@@ -4610,6 +4672,7 @@ export const useStore = create<Store>((set, get) => {
       folders: [],
       hasAssetsDir: false,
       assetFiles: [],
+      assetUndoStack: [],
       vaultTasks: [],
       selectedTags: [],
       view: { kind: 'folder', folder: 'inbox', subpath: '' },
@@ -4655,6 +4718,7 @@ export const useStore = create<Store>((set, get) => {
         folders: [],
         hasAssetsDir: false,
         assetFiles: [],
+        assetUndoStack: [],
         vaultTasks: [],
         selectedTags: [],
         view: { kind: 'folder', folder: 'inbox', subpath: '' },
@@ -4793,6 +4857,7 @@ export const useStore = create<Store>((set, get) => {
         folders: [],
         hasAssetsDir: false,
         assetFiles: [],
+        assetUndoStack: [],
         vaultTasks: [],
         selectedTags: [],
         view: { kind: 'folder', folder: 'inbox', subpath: '' },
@@ -4874,6 +4939,7 @@ export const useStore = create<Store>((set, get) => {
         folders: [],
         hasAssetsDir: false,
         assetFiles: [],
+        assetUndoStack: [],
         vaultTasks: [],
         selectedTags: [],
         view: { kind: 'folder', folder: 'inbox', subpath: '' },
@@ -4953,6 +5019,7 @@ export const useStore = create<Store>((set, get) => {
         folders: [],
         hasAssetsDir: false,
         assetFiles: [],
+        assetUndoStack: [],
         vaultTasks: [],
         selectedTags: [],
         view: { kind: 'folder', folder: 'inbox', subpath: '' },
@@ -4996,6 +5063,7 @@ export const useStore = create<Store>((set, get) => {
           folders: [],
           hasAssetsDir: false,
           assetFiles: [],
+          assetUndoStack: [],
           vaultTasks: [],
           selectedTags: [],
           view: { kind: 'folder', folder: 'inbox', subpath: '' },
@@ -5028,6 +5096,7 @@ export const useStore = create<Store>((set, get) => {
         folders: [],
         hasAssetsDir: false,
         assetFiles: [],
+        assetUndoStack: [],
         vaultTasks: [],
         selectedTags: [],
         view: { kind: 'folder', folder: 'inbox', subpath: '' },

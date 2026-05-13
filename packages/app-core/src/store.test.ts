@@ -178,6 +178,43 @@ describe('local vault shortcuts', () => {
   })
 })
 
+describe('asset undo', () => {
+  it('records deleted assets and restores them on undo', async () => {
+    const deleted = {
+      path: 'media/10-7.png',
+      name: '10-7.png',
+      undoToken: '11111111-1111-4111-8111-111111111111'
+    }
+    const restored = {
+      path: deleted.path,
+      name: deleted.name,
+      kind: 'image' as const,
+      siblingOrder: 0,
+      size: 12,
+      updatedAt: 2
+    }
+    const deleteAsset = vi.fn().mockResolvedValue(deleted)
+    const restoreDeletedAsset = vi.fn().mockResolvedValue(restored)
+    const listAssets = vi.fn().mockResolvedValue([])
+    installZen({ deleteAsset, restoreDeletedAsset, listAssets })
+
+    const { useStore } = await loadStore()
+
+    await useStore.getState().deleteAsset(deleted.path)
+
+    expect(deleteAsset).toHaveBeenCalledWith(deleted.path)
+    expect(useStore.getState().assetUndoStack).toEqual([
+      expect.objectContaining({ kind: 'delete-asset', deleted, createdAt: expect.any(Number) })
+    ])
+
+    await expect(useStore.getState().undoLastAssetAction()).resolves.toBe(true)
+
+    expect(restoreDeletedAsset).toHaveBeenCalledWith(deleted)
+    expect(useStore.getState().assetUndoStack).toEqual([])
+    expect(listAssets).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('vault text search jumps', () => {
   it('records the pending editor jump before loading an unopened note', async () => {
     const note = makeNote('first line\nsecond line target\n')

@@ -37,7 +37,7 @@ import {
   tooltips
 } from '@codemirror/view'
 import { Vim, getCM, vim } from '@replit/codemirror-vim'
-import type { NoteComment, NoteFolder } from '@shared/ipc'
+import type { AssetMeta, ImportedAsset, NoteComment, NoteFolder } from '@shared/ipc'
 import {
   defaultKeymap,
   history,
@@ -84,7 +84,13 @@ import { isHelpTabPath } from '@shared/help'
 import { isArchiveTabPath } from '@shared/archive'
 import { isTrashTabPath } from '@shared/trash'
 import { isQuickNotesTabPath } from '@shared/quick-notes'
-import { hasZenItem, readDragPayload, setDragPayload, type DragPayload } from '../lib/dnd'
+import {
+  hasZenAssetItem,
+  hasZenItem,
+  readDragPayload,
+  setDragPayload,
+  type DragPayload
+} from '../lib/dnd'
 import {
   getImageBlockDropPlacement,
   hasImageBlockDragPayload,
@@ -134,8 +140,14 @@ import {
 } from '../lib/vault-layout'
 import {
   droppedPathsFromTransfer,
-  hasDroppedFiles
+  formatImportedAssetsForInsertion,
+  hasDroppedFiles,
+  importedAssetForExistingVaultAsset
 } from '../lib/editor-drops'
+import {
+  pastedImageFilesFromClipboard,
+  pastedImageInputFromFile
+} from '../lib/editor-paste-images'
 import { ZEN_SET_PANE_MODE_EVENT, type PaneMode } from '../lib/pane-mode'
 import { resolveCommentAnchor, selectionToCommentAnchor } from '../lib/comments'
 import { ZEN_OPEN_EDITOR_CONTEXT_MENU_EVENT } from '../lib/keyboard-context-menu'
@@ -513,8 +525,10 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
   )
   const activeCommentId = useStore((s) => s.activeCommentId)
   const notes = useStore((s) => s.notes)
+  const assetFiles = useStore((s) => s.assetFiles)
   const vault = useStore((s) => s.vault)
   const refreshNotes = useStore((s) => s.refreshNotes)
+  const refreshAssets = useStore((s) => s.refreshAssets)
   const loading = useStore((s) => s.loadingNote && isActive)
 
   const setActivePane = useStore((s) => s.setActivePane)
@@ -586,6 +600,9 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
   const [tabStripOverflowing, setTabStripOverflowing] = useState(false)
 
   const viewRef = useRef<EditorView | null>(null)
+  const importPastedImagesRef = useRef<
+    ((files: File[], view: EditorView) => Promise<void>) | null
+  >(null)
   const paneRootRef = useRef<HTMLDivElement | null>(null)
   const tabStripRef = useRef<HTMLDivElement | null>(null)
   const paneBodyRef = useRef<HTMLDivElement | null>(null)
@@ -1230,6 +1247,14 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
               setSelectionCommentAction(null)
               return true
             },
+            paste: (event, view) => {
+              const files = pastedImageFilesFromClipboard(event.clipboardData)
+              if (files.length === 0) return false
+              event.preventDefault()
+              event.stopPropagation()
+              void importPastedImagesRef.current?.(files, view)
+              return true
+            },
             keydown: (event, view) => {
               const state = useStore.getState()
               if (
@@ -1701,6 +1726,16 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
 
   const handlePaneBodyDragOver = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
+      if (hasZenAssetItem(e)) {
+        e.preventDefault()
+        e.stopPropagation()
+        e.dataTransfer.dropEffect = 'copy'
+        setAssetDropActive(true)
+        setPaneDropEdge(null)
+        setTabDropIndicator(null)
+        setImageDropIndicatorTop(null)
+        return
+      }
       if (hasZenItem(e)) {
         e.preventDefault()
         e.stopPropagation()
@@ -1742,50 +1777,88 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
     [computePaneEdge, tabsEnabled]
   )
 
+  const insertImportedAssets = useCallback(
+    async (
+      imported: ImportedAsset[],
+      coords?: { x: number; y: number },
+      targetView = viewRef.current
+    ) => {
+      if (imported.length === 0) return
+      const view = targetView
+      if (!view) return
+      let insertAt = view.state.selection.main.head
+      if (coords) insertAt = view.posAtCoords(coords) ?? insertAt
+      const doc = view.state.doc
+      const before = insertAt > 0 ? doc.sliceString(insertAt - 1, insertAt) : ''
+      const after = insertAt < doc.length ? doc.sliceString(insertAt, insertAt + 1) : ''
+      const insert = formatImportedAssetsForInsertion(imported, before, after)
+      view.dispatch({
+        changes: { from: insertAt, to: insertAt, insert },
+        selection: { anchor: insertAt + insert.length }
+      })
+      await refreshNotes()
+      setFocusedPanel('editor')
+      view.focus()
+    },
+    [refreshNotes, setFocusedPanel]
+  )
+
+  const insertExistingVaultAssets = useCallback(
+    async (paths: string[], coords?: { x: number; y: number }) => {
+      const byPath = new Map<string, AssetMeta>(assetFiles.map((asset) => [asset.path, asset]))
+      const imported = paths
+        .map((path) => byPath.get(path))
+        .filter((asset): asset is AssetMeta => !!asset)
+        .map(importedAssetForExistingVaultAsset)
+      await insertImportedAssets(imported, coords)
+    },
+    [assetFiles, insertImportedAssets]
+  )
+
   const importDroppedFiles = useCallback(
     async (sourcePaths: string[], coords?: { x: number; y: number }) => {
       if (!content || !vault || sourcePaths.length === 0) return
       try {
         const imported = await window.zen.importFilesToNote(content.path, sourcePaths)
-        if (imported.length === 0) return
-        const view = viewRef.current
-        if (!view) return
-        let insertAt = view.state.selection.main.head
-        if (coords) insertAt = view.posAtCoords(coords) ?? insertAt
-        let insert = imported.map((asset) => asset.markdown).join('\n\n')
-        const doc = view.state.doc
-        const before = insertAt > 0 ? doc.sliceString(insertAt - 1, insertAt) : ''
-        const after = insertAt < doc.length ? doc.sliceString(insertAt, insertAt + 1) : ''
-        const wantsStandalonePreview = imported.some(
-          (asset) =>
-            asset.kind === 'image' ||
-            asset.kind === 'pdf' ||
-            asset.kind === 'audio' ||
-            asset.kind === 'video'
-        )
-        if (wantsStandalonePreview) {
-          if (before && before !== '\n') insert = `\n\n${insert}`
-          insert = `${insert.replace(/\n*$/, '')}\n\n`
-        } else {
-          if (before && before !== '\n') insert = `\n${insert}`
-          if (after && after !== '\n') insert = `${insert}\n`
-        }
-        view.dispatch({
-          changes: { from: insertAt, to: insertAt, insert },
-          selection: { anchor: insertAt + insert.length }
-        })
-        await refreshNotes()
-        setFocusedPanel('editor')
-        view.focus()
+        await insertImportedAssets(imported, coords)
       } catch (err) {
         window.alert((err as Error).message)
       }
     },
-    [content, refreshNotes, setFocusedPanel, vault]
+    [content, insertImportedAssets, vault]
   )
+
+  const importPastedImages = useCallback(
+    async (files: File[], view: EditorView) => {
+      if (!viewPathRef.current || files.length === 0) return
+      try {
+        const imported: ImportedAsset[] = []
+        for (const file of files) {
+          imported.push(await window.zen.importPastedImage(await pastedImageInputFromFile(file)))
+        }
+        await insertImportedAssets(imported, undefined, view)
+        await refreshAssets()
+      } catch (err) {
+        window.alert((err as Error).message)
+      }
+    },
+    [insertImportedAssets, refreshAssets]
+  )
+  importPastedImagesRef.current = importPastedImages
 
   const handlePaneBodyDrop = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
+      if (hasZenAssetItem(e)) {
+        const payload = readDragPayload(e)
+        setAssetDropActive(false)
+        setPaneDropEdge(null)
+        setImageDropIndicatorTop(null)
+        if (!payload || payload.kind !== 'asset') return
+        e.preventDefault()
+        e.stopPropagation()
+        void insertExistingVaultAssets([payload.path], { x: e.clientX, y: e.clientY })
+        return
+      }
       if (hasZenItem(e)) {
         const payload = readDragPayload(e)
         // With tabs disabled the user explicitly wants single-pane
@@ -1846,6 +1919,7 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
       computePaneEdge,
       content,
       importDroppedFiles,
+      insertExistingVaultAssets,
       movePaneTab,
       openNoteInPane,
       paneId,

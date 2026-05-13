@@ -15,6 +15,7 @@ import { buildMoveNotePrompt, parseMoveNoteTarget } from '../lib/move-note'
 import { extractTags } from '../lib/tags'
 import { setDragPayload } from '../lib/dnd'
 import { promptApp } from '../lib/prompt-requests'
+import { confirmApp } from '../lib/confirm-requests'
 import { resolveSystemFolderLabels } from '../lib/system-folder-labels'
 import {
   assetBelongsToFolderView,
@@ -70,6 +71,8 @@ export function NoteList(): JSX.Element {
   const createAndOpen = useStore((s) => s.createAndOpen)
   const toggleNoteList = useStore((s) => s.toggleNoteList)
   const refreshNotes = useStore((s) => s.refreshNotes)
+  const refreshAssets = useStore((s) => s.refreshAssets)
+  const deleteAssetAction = useStore((s) => s.deleteAsset)
   const noteListWidth = useStore((s) => s.noteListWidth)
   const setNoteListWidth = useStore((s) => s.setNoteListWidth)
   const noteSortOrder = useStore((s) => s.noteSortOrder)
@@ -85,6 +88,15 @@ export function NoteList(): JSX.Element {
   const workspaceMode = useStore((s) => s.workspaceMode)
   const canRevealInFileManager =
     window.zen.getAppInfo().runtime === 'desktop' && workspaceMode !== 'remote'
+  const canManageAssetFiles =
+    window.zen.getAppInfo().runtime === 'desktop' &&
+    workspaceMode !== 'remote' &&
+    typeof window.zen.renameAsset === 'function' &&
+    typeof window.zen.moveAsset === 'function' &&
+    typeof window.zen.duplicateAsset === 'function'
+  const canDeleteAssets =
+    window.zen.getAppInfo().runtime === 'desktop' &&
+    workspaceMode !== 'remote'
   const absolutePathLabel =
     workspaceMode === 'remote' ? 'Copy Server Path' : 'Copy Absolute Path'
   const folderLabels = useMemo(
@@ -289,27 +301,94 @@ export function NoteList(): JSX.Element {
     const root = vault?.root ?? ''
     const sep = root.includes('\\') ? '\\' : '/'
     const abs = [root.replace(/[\\/]+$/, ''), ...asset.path.split('/').filter(Boolean)].join(sep)
+    const currentDir = asset.path.split('/').slice(0, -1).join('/')
+    const openAsset = async (): Promise<void> => {
+      await openNoteInTab(assetTabPath(asset.path))
+    }
 
     const items: ContextMenuItem[] = [
       {
+        label: 'Open',
+        onSelect: openAsset
+      },
+      {
         label: 'Open in New Tab',
-        onSelect: async () => {
-          await openNoteInTab(assetTabPath(asset.path))
-        }
-      },
-      {
-        label: 'Copy Path',
-        onSelect: async () => {
-          window.zen.clipboardWriteText(asset.path)
-        }
-      },
-      {
-        label: absolutePathLabel,
-        onSelect: async () => {
-          window.zen.clipboardWriteText(abs)
-        }
+        onSelect: openAsset
       }
     ]
+
+    if (canManageAssetFiles) {
+      items.push({
+        label: 'Rename…',
+        onSelect: async () => {
+          const next = await promptApp({
+            title: 'Rename asset',
+            initialValue: asset.name,
+            okLabel: 'Rename',
+            validate: (value) => {
+              const clean = value.trim()
+              if (!clean) return 'Asset name is required'
+              if (/[\\/]/.test(clean)) return 'Use only a file name'
+              if (/\.md$/i.test(clean)) return 'Use note actions for markdown notes'
+              return null
+            }
+          })
+          if (!next || next === asset.name) return
+          await window.zen.renameAsset(asset.path, next)
+          await refreshAssets()
+        }
+      })
+      items.push({
+        label: 'Move…',
+        onSelect: async () => {
+          const target = await promptApp({
+            title: 'Move asset',
+            description: 'Enter a vault-relative folder path. Leave empty to move to the vault root.',
+            initialValue: currentDir,
+            placeholder: 'media/screenshots',
+            okLabel: 'Move',
+            allowEmptySubmit: true,
+            validate: (value) => {
+              const clean = value.trim()
+              if (clean.includes('..')) return 'Path cannot contain ..'
+              if (clean.split('/').includes('.zennotes')) {
+                return 'Cannot move assets into internal ZenNotes files'
+              }
+              return null
+            }
+          })
+          if (target === null || target === currentDir) return
+          await window.zen.moveAsset(asset.path, target)
+          await refreshAssets()
+        }
+      })
+      items.push({
+        label: 'Duplicate',
+        onSelect: async () => {
+          await window.zen.duplicateAsset(asset.path)
+          await refreshAssets()
+        }
+      })
+    }
+
+    items.push({
+      label: 'Copy as Embed',
+      onSelect: async () => {
+        window.zen.clipboardWriteText(`![[${asset.path}]]`)
+      }
+    })
+    items.push({
+      label: 'Copy Path',
+      onSelect: async () => {
+        window.zen.clipboardWriteText(asset.path)
+      }
+    })
+    items.push({
+      label: absolutePathLabel,
+      onSelect: async () => {
+        window.zen.clipboardWriteText(abs)
+      }
+    })
 
     if (canRevealInFileManager) {
       items.push({
@@ -320,8 +399,39 @@ export function NoteList(): JSX.Element {
       })
     }
 
+    if (canDeleteAssets) {
+      items.push({ kind: 'separator' })
+      items.push({
+        label: 'Delete Asset…',
+        icon: <TrashIcon />,
+        danger: true,
+        onSelect: async () => {
+          const ok = await confirmApp({
+            title: `Delete ${asset.name}?`,
+            description:
+              'This removes the file from the vault. Notes that embed it will keep the link, but the media will no longer render.',
+            confirmLabel: 'Delete asset',
+            danger: true
+          })
+          if (!ok) return
+          await deleteAssetAction(asset.path)
+        }
+      })
+    }
+
     return items
-  }, [assetMenu, assetFiles, canRevealInFileManager, absolutePathLabel, vault, openNoteInTab])
+  }, [
+    assetMenu,
+    assetFiles,
+    canRevealInFileManager,
+    canManageAssetFiles,
+    canDeleteAssets,
+    absolutePathLabel,
+    vault,
+    openNoteInTab,
+    refreshAssets,
+    deleteAssetAction
+  ])
 
   /**
    * Filter notes for the current view. For folder views we match the
@@ -880,6 +990,8 @@ function FolderAssetRow({
       type="button"
       onClick={onOpen}
       onContextMenu={onContextMenu}
+      draggable
+      onDragStart={(e) => setDragPayload(e, { kind: 'asset', path: asset.path })}
       className={[
         'list-row flex h-[72px] w-full items-center gap-3 rounded-lg px-3 py-2 text-left outline-none focus:outline-none',
         vimHighlight ? 'vim-cursor' : 'hover:bg-paper-200/60'
@@ -940,6 +1052,8 @@ function AssetCard({
       type="button"
       onClick={onOpen}
       onContextMenu={onContextMenu}
+      draggable
+      onDragStart={(e) => setDragPayload(e, { kind: 'asset', path: asset.path })}
       className="flex h-full min-h-[154px] flex-col overflow-hidden rounded-xl border border-paper-300/70 bg-paper-50/24 text-left transition-colors hover:border-paper-400 hover:bg-paper-100/40"
     >
       <div className="flex min-h-0 flex-1 items-center justify-center bg-paper-200/25">
@@ -985,6 +1099,8 @@ function AssetRow({
       type="button"
       onClick={onOpen}
       onContextMenu={onContextMenu}
+      draggable
+      onDragStart={(e) => setDragPayload(e, { kind: 'asset', path: asset.path })}
       className="flex h-[60px] items-center gap-3 rounded-lg border border-transparent px-3 py-2 text-left transition-colors hover:border-paper-300/70 hover:bg-paper-200/45"
     >
       <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-paper-200/45">
