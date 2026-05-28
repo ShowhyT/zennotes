@@ -347,3 +347,46 @@ describe('vault text search jumps', () => {
     await open
   })
 })
+
+describe('importDroppedMarkdownFiles (web import-as-note)', () => {
+  it('creates a note from a dropped markdown file, writes its contents, and opens it', async () => {
+    const created = { ...makeNote(''), path: 'inbox/Dropped.md', title: 'Dropped' }
+    const createNote = vi.fn().mockResolvedValue(created)
+    const writeNote = vi.fn().mockResolvedValue(created)
+    installZen({
+      createNote,
+      writeNote,
+      listNotes: vi.fn().mockResolvedValue([created]),
+      readNote: vi.fn().mockResolvedValue({ ...created, body: '# Hello' })
+    })
+
+    const { useStore } = await loadStore()
+    const file = { name: 'Dropped.md', text: () => Promise.resolve('# Hello') } as unknown as File
+
+    await useStore.getState().importDroppedMarkdownFiles([file])
+
+    expect(createNote).toHaveBeenCalledWith('inbox', 'Dropped')
+    expect(writeNote).toHaveBeenCalledWith('inbox/Dropped.md', '# Hello')
+    expect(useStore.getState().selectedPath).toBe('inbox/Dropped.md')
+  })
+
+  it('still creates the note when the dropped file is empty (no content write)', async () => {
+    const created = { ...makeNote(''), path: 'inbox/Empty.md', title: 'Empty' }
+    const createNote = vi.fn().mockResolvedValue(created)
+    const writeNote = vi.fn().mockResolvedValue(created)
+    installZen({
+      createNote,
+      writeNote,
+      listNotes: vi.fn().mockResolvedValue([created]),
+      readNote: vi.fn().mockResolvedValue({ ...created, body: '' })
+    })
+
+    const { useStore } = await loadStore()
+    const file = { name: 'Empty.md', text: () => Promise.resolve('') } as unknown as File
+
+    await useStore.getState().importDroppedMarkdownFiles([file])
+
+    expect(createNote).toHaveBeenCalledWith('inbox', 'Empty')
+    expect(writeNote).not.toHaveBeenCalled()
+  })
+})

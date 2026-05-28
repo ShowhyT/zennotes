@@ -139,6 +139,7 @@ import {
   noteFolderSubpath
 } from '../lib/vault-layout'
 import {
+  dragHasAttachmentFile,
   droppedPathsFromTransfer,
   formatImportedAssetsForInsertion,
   hasDroppedFiles,
@@ -1777,7 +1778,10 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
       e.preventDefault()
       e.stopPropagation()
       e.dataTransfer.dropEffect = 'copy'
-      setAssetDropActive(true)
+      // Show the "drop to attach" border only for importable attachments.
+      // Markdown files open as a note (handled at the window level), so they
+      // shouldn't flash an import affordance around the current note.
+      setAssetDropActive(dragHasAttachmentFile(e.dataTransfer))
       setPaneDropEdge(null)
       setImageDropIndicatorTop(null)
     },

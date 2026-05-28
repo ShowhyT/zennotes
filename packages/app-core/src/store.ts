@@ -1518,6 +1518,14 @@ interface Store {
     subpath?: string,
     options?: { focusTitle?: boolean; title?: string }
   ) => Promise<void>
+  /**
+   * Web counterpart of the desktop drag-to-open feature: for each
+   * drag-and-dropped markdown File, read its contents, create a note from
+   * it (titled after the filename), and open it. The browser only exposes
+   * dropped file *contents*, not paths, so unlike desktop — which opens the
+   * file in place — the web build brings it into the vault as a note.
+   */
+  importDroppedMarkdownFiles: (files: File[]) => Promise<void>
   closeActiveNote: () => Promise<void>
   trashActive: () => Promise<void>
   restoreActive: () => Promise<void>
@@ -3289,6 +3297,24 @@ export const useStore = create<Store>((set, get) => {
     } catch (err) {
       console.error('createNote failed', err)
     }
+  },
+
+  importDroppedMarkdownFiles: async (files) => {
+    const createdPaths: string[] = []
+    for (const file of files) {
+      try {
+        const content = await file.text()
+        const title = file.name.replace(/\.(md|markdown)$/i, '').trim()
+        const meta = await window.zen.createNote('inbox', title || undefined)
+        if (content) await window.zen.writeNote(meta.path, content)
+        createdPaths.push(meta.path)
+      } catch (err) {
+        console.error('importDroppedMarkdownFiles failed', file.name, err)
+      }
+    }
+    if (createdPaths.length === 0) return
+    await get().refreshNotes()
+    for (const path of createdPaths) await get().openNoteInTab(path)
   },
 
   closeActiveNote: async () => {

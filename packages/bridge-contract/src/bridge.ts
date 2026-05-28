@@ -175,6 +175,14 @@ export interface ZenBridge {
   writeExternalFile(body: string): Promise<void>
   /** Move the current standalone editor window's file into the active vault. */
   moveExternalFileToVault(): Promise<MoveExternalFileResult>
+  /**
+   * Open a markdown file from an absolute OS path — as a note when it lives
+   * inside a known vault, otherwise a standalone external-file window. The
+   * drag-and-drop counterpart of the Finder "Open in ZenNotes" entry.
+   * Resolves to true when a window was opened or focused. Desktop only; the
+   * web bridge is a no-op that resolves to false.
+   */
+  openMarkdownFile(absPath: string): Promise<boolean>
   toggleQuickCapture(): Promise<void>
   getQuickCaptureHotkey(): Promise<string>
   setQuickCaptureHotkey(hotkey: string): Promise<{ ok: boolean; hotkey: string; error?: string }>

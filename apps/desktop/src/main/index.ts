@@ -2451,6 +2451,19 @@ function registerIpc(): void {
     return { vaultRoot: vault.root, relPath: meta.path }
   })
 
+  // Drag-and-drop a markdown file onto a window. Routes through the same
+  // vault-aware opener as the Finder "Open in ZenNotes" entry / `open-file`
+  // event: a note inside a known vault opens against that vault, anything
+  // else opens in a standalone external-file window. The absolute path comes
+  // from `webUtils.getPathForFile` on the dropped File, and the stat +
+  // markdown checks inside `openMarkdownFileFromOS` re-validate it.
+  handle(IPC.APP_OPEN_MARKDOWN_FILE, async (_event, rawPath: string): Promise<boolean> => {
+    if (typeof rawPath !== 'string' || !rawPath.trim() || !isMarkdownFilePath(rawPath)) {
+      return false
+    }
+    return await openMarkdownFileFromOS(path.resolve(rawPath), false)
+  })
+
   handle(IPC.WINDOW_TOGGLE_QUICK_CAPTURE, async () => {
     toggleQuickCaptureWindow()
   })

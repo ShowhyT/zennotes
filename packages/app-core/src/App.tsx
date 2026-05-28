@@ -12,6 +12,7 @@ import { matchesShortcut } from './lib/keymaps'
 import { requestPaneMode } from './lib/pane-mode'
 import { recordRendererPerf } from './lib/perf'
 import { focusEditorNormalMode } from './lib/editor-focus'
+import { installMarkdownFileDropHandler } from './lib/markdown-file-drop'
 import {
   appUpdateNoticeLabel,
   appUpdatePrimaryActionLabel,
@@ -308,6 +309,27 @@ function App(): JSX.Element {
 
   useEffect(() => {
     window.zen.notifyRendererReady()
+  }, [])
+
+  // Drag a markdown file from the OS onto the window to open it. Desktop
+  // resolves the file to a path and opens it in place (vault note when it
+  // lives inside a known vault, otherwise a standalone external-file window) —
+  // the counterpart of the Finder "Open in ZenNotes" entry. The web build has
+  // no OS paths, so it imports the dropped contents as a new note instead.
+  useEffect(() => {
+    const runtime = window.zen.getAppInfo().runtime
+    return installMarkdownFileDropHandler(document, {
+      onMarkdownFiles: (files) => {
+        if (runtime === 'web') {
+          void useStore.getState().importDroppedMarkdownFiles(files)
+          return
+        }
+        for (const file of files) {
+          const path = window.zen.getPathForFile(file)
+          if (path) void window.zen.openMarkdownFile(path)
+        }
+      }
+    })
   }, [])
 
   useEffect(() => {

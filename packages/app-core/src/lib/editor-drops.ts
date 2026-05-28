@@ -76,6 +76,27 @@ function parseDroppedPathCandidate(raw: string | null | undefined): string | nul
   return null
 }
 
+const ATTACHMENT_MIME_RE = /^(image|audio|video)\//
+
+/**
+ * True when an OS file drag carries an importable *attachment* (image,
+ * audio, video, or PDF), as opposed to a markdown file that should open
+ * as a note. File contents/names aren't readable during dragover, but the
+ * item MIME types are — and those are reliable for media (`image/*` etc.),
+ * which is all this affordance needs. Markdown drags report `text/markdown`
+ * or an empty type, so they never match and the editor skips its
+ * "drop to attach" border (the file opens instead, via the window-level
+ * markdown drop handler). Errs toward NOT showing the border when the drag
+ * type is unknown.
+ */
+export function dragHasAttachmentFile(dataTransfer: DataTransfer | null): boolean {
+  if (!dataTransfer) return false
+  const items = Array.from(dataTransfer.items ?? []).filter((item) => item.kind === 'file')
+  return items.some(
+    (item) => ATTACHMENT_MIME_RE.test(item.type) || item.type === 'application/pdf'
+  )
+}
+
 export function hasDroppedFiles(dataTransfer: DataTransfer | null): boolean {
   if (!dataTransfer) return false
   if (dataTransfer.files.length > 0) return true

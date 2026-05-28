@@ -877,6 +877,12 @@ async function moveExternalFileToVault(): Promise<MoveExternalFileResult> {
   return notImplemented('moveExternalFileToVault')
 }
 
+async function openMarkdownFile(_absPath: string): Promise<boolean> {
+  // The web client has no OS filesystem to open standalone markdown files
+  // from; drag-and-drop-to-open is a desktop-only capability.
+  return false
+}
+
 async function toggleQuickCapture(): Promise<void> {
   // Web build can't bind a system-wide shortcut; the quick capture
   // window is desktop-only.
@@ -1113,6 +1119,7 @@ export const httpBridge: ZenBridge = {
   readExternalFile,
   writeExternalFile,
   moveExternalFileToVault,
+  openMarkdownFile,
   toggleQuickCapture,
   getQuickCaptureHotkey,
   setQuickCaptureHotkey,

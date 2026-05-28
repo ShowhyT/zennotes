@@ -88,6 +88,7 @@ export const IPC = {
   APP_READ_EXTERNAL_FILE: 'app:read-external-file',
   APP_WRITE_EXTERNAL_FILE: 'app:write-external-file',
   APP_MOVE_EXTERNAL_FILE_TO_VAULT: 'app:move-external-file-to-vault',
+  APP_OPEN_MARKDOWN_FILE: 'app:open-markdown-file',
   TIKZ_RENDER: 'tikz:render',
   MCP_STATUS: 'mcp:status',
   MCP_INSTALL: 'mcp:install',
