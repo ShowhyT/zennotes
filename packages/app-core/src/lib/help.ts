@@ -92,6 +92,16 @@ export const HELP_HOW_TO_GUIDES: HelpCard[] = [
       'When you are browsing a folder, use the current-folder note command instead of creating in Inbox and moving later. That keeps new notes close to the project or area you were already working in.'
   },
   {
+    title: 'Start a note from a template',
+    body:
+      'Open the template picker with `Space t`, the `:template` (or `:tmpl`) ex command, or the “New Note from Template…” command palette entry. Pick a built-in template — engineering ones like ADR, RFC/Design Doc, Bug Report, Postmortem, Meeting Notes, and 1:1, or personal ones like Daily Note, Weekly Review, Reading Notes, Journal, Project Kickoff, and To-do — or one of your own. ZenNotes then asks which folder to create it in (defaulting to the folder you are viewing) and fills in variables like the date and week before placing your cursor where the template marks it. To create straight into a specific folder, right-click that folder in the sidebar and choose “New from template”.'
+  },
+  {
+    title: 'Make and edit your own templates',
+    body:
+      'Open Settings → Templates. Press “New template” to author one: a template is just markdown with optional YAML frontmatter (`name`, `description`, `category`, `titleTemplate`, `targetFolder`, `targetSubpath`) and a body. Use the variables `{{title}}`, `{{date}}`, `{{date:YYYY-MM-DD}}` (any moment-style format), `{{time}}`, `{{week}}`, and `{{cursor}}` (where the caret lands). Custom templates are saved as plain `.md` files under `.zennotes/templates/`. You can also fork a built-in by pressing Edit on it — that creates an editable copy that shadows the original, and Reset restores the built-in. From any note, the “Save Current Note as Template…” command captures it as a new template.'
+  },
+  {
     title: 'Move a note without dragging',
     body:
       'Use the note context menu, search for `move` or `mv` in the command palette, or run `:move` or `:mv`. With no argument, ZenNotes opens a folder picker; with a target like `archive/Reference` or `inbox/Work`, it moves the note directly.'
@@ -193,6 +203,11 @@ export const HELP_CORE_CONCEPTS: HelpCard[] = [
     title: '@ shortcuts insert relative dates',
     body:
       'Typing `@` in normal text opens date suggestions for Today, Yesterday, and Tomorrow. Choosing one inserts an ISO date like `2026-04-15`, which keeps notes file-friendly, searchable, and easy to sort.'
+  },
+  {
+    title: 'Templates scaffold new notes',
+    body:
+      'Templates turn a repeated note shape into one keystroke. ZenNotes ships built-in templates for engineering (ADR, RFC, Bug Report, Postmortem, Meeting Notes, 1:1) and personal use (Daily Note, Weekly Review, Reading Notes, Journal, Project Kickoff, To-do), and you can author your own under Settings → Templates. A template is plain markdown with optional frontmatter and variables — `{{title}}`, `{{date}}`, `{{date:FORMAT}}`, `{{time}}`, `{{week}}`, and `{{cursor}}` — substituted at creation time. Custom templates are stored as `.md` files in `.zennotes/templates/`, so they stay portable like everything else. Daily and weekly notes can each be assigned a template so dated notes start pre-filled.'
   },
   {
     title: 'Reference and connections support research-heavy work',
@@ -401,6 +416,21 @@ export const HELP_VIM_COMMANDS: HelpExCommand[] = [
     detail: 'Open the vault-wide Tasks virtual tab.'
   },
   {
+    command: ':template / :tmpl',
+    summary: 'New note from a template',
+    detail: 'Open the template picker. With an argument like `:template ADR` it skips the picker and creates from the best-matching template directly.'
+  },
+  {
+    command: ':daily',
+    summary: "Open today's daily note",
+    detail: 'Open or create today’s daily note (requires daily notes enabled in Settings → Vault). Uses the assigned daily template if one is set.'
+  },
+  {
+    command: ':weekly',
+    summary: "Open this week's note",
+    detail: 'Open or create this week’s note with a YYYY-Www title (requires weekly notes enabled in Settings → Vault). Uses the assigned weekly template if one is set.'
+  },
+  {
     command: ':tag foo bar',
     summary: 'Open Tags with a selection',
     detail: 'Open the Tags view and replace the selected tag set with the given tags.'
@@ -521,6 +551,21 @@ export const HELP_VIM_COMMANDS: HelpExCommand[] = [
     detail: 'Open the command palette directly to the local vault switcher.'
   },
   {
+    command: '<Space> t',
+    summary: 'Leader new from template',
+    detail: 'Open the template picker to create a note from a built-in or custom template.'
+  },
+  {
+    command: '<Space> d',
+    summary: "Leader today's daily note",
+    detail: 'Open or create today’s daily note (when daily notes are enabled in Settings → Vault).'
+  },
+  {
+    command: '<Space> w',
+    summary: "Leader this week's note",
+    detail: 'Open or create this week’s note (when weekly notes are enabled in Settings → Vault).'
+  },
+  {
     command: ':outline',
     summary: 'Note outline palette',
     detail: 'The ex-line path to the same searchable note outline opened by the Leader outline binding.'
@@ -600,7 +645,19 @@ export const HELP_SETTINGS: HelpSettingsSection[] = [
     title: 'Vault',
     items: [
       { label: 'Vault location', detail: 'Reveal or change the root folder ZenNotes treats as the active vault.' },
+      { label: 'Primary notes location', detail: 'Treat `inbox/` as the main notes area, or use the vault root directly for an Obsidian-style flat vault.' },
+      { label: 'Daily notes', detail: 'Enable a daily-notes workflow, choose its directory, and assign a template so each day’s note starts pre-filled. Open today’s note with `Space d`, `:daily`, or the command palette.' },
+      { label: 'Weekly notes', detail: 'Enable weekly notes with a YYYY-Www title, choose a directory, and assign a template. Open this week’s note with `Space w`, `:weekly`, or the command palette.' },
       { label: 'System folder labels', detail: 'Rename how Inbox, Quick Notes, Archive, and Trash appear in the UI without renaming the real folders on disk.' }
+    ]
+  },
+  {
+    title: 'Templates',
+    items: [
+      { label: 'Template library', detail: 'Browse every template — built-in and custom. Built-ins cover engineering (ADR, RFC, Bug Report, Postmortem, Meeting Notes, 1:1) and personal use (Daily Note, Weekly Review, Reading Notes, Journal, Project Kickoff, To-do).' },
+      { label: 'Create a custom template', detail: 'Author a new template as markdown with optional frontmatter (`name`, `description`, `category`, `titleTemplate`, `targetFolder`, `targetSubpath`) and variables like `{{title}}`, `{{date}}`, `{{date:FORMAT}}`, `{{time}}`, `{{week}}`, and `{{cursor}}`. It is saved as a `.md` file in `.zennotes/templates/`.' },
+      { label: 'Edit or reset built-ins', detail: 'Press Edit on a built-in to fork an editable copy that shadows the original everywhere; Reset removes the copy and restores the built-in. Custom templates can be edited or deleted directly.' },
+      { label: 'Where templates appear', detail: 'Use a template via the picker (`Space t` / `:template` / “New Note from Template…”), from a folder’s right-click “New from template”, or as the assigned daily/weekly note template. Custom templates require a local vault; built-ins work everywhere.' }
     ]
   },
   {

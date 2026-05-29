@@ -106,8 +106,43 @@ export function buildCommands(options?: { includeUnavailable?: boolean }): Comma
       title: "Open Today's Daily Note",
       category: 'Note',
       keywords: 'daily journal date today log',
+      shortcut: leaderShortcut('vim.leaderDailyNote'),
       when: () => getState().vaultSettings.dailyNotes.enabled,
       run: () => getState().openTodayDailyNote()
+    },
+    {
+      id: 'note.weekly.thisWeek',
+      title: "Open This Week's Note",
+      category: 'Note',
+      keywords: 'weekly week review date log',
+      shortcut: leaderShortcut('vim.leaderWeeklyNote'),
+      when: () => getState().vaultSettings.weeklyNotes.enabled,
+      run: () => getState().openThisWeekWeeklyNote()
+    },
+    {
+      id: 'template.create',
+      title: 'New Note from Template…',
+      category: 'Note',
+      keywords: 'template scaffold adr rfc meeting daily weekly boilerplate new',
+      shortcut: leaderShortcut('vim.leaderTemplatePicker'),
+      run: () => getState().setTemplatePaletteOpen(true)
+    },
+    {
+      id: 'template.insert',
+      title: 'Insert Template into Current Note…',
+      category: 'Note',
+      keywords: 'template insert apply into current note scaffold fill',
+      shortcut: leaderShortcut('vim.leaderInsertTemplate'),
+      when: () => !!getState().activeNote,
+      run: () => getState().openTemplatePaletteForInsert()
+    },
+    {
+      id: 'template.saveCurrent',
+      title: 'Save Current Note as Template…',
+      category: 'Note',
+      keywords: 'template save custom create from note',
+      when: () => !!getState().activeNote,
+      run: () => getState().saveActiveNoteAsTemplate()
     },
     {
       id: 'note.new.here',

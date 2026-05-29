@@ -14,6 +14,8 @@ import { foldAll, unfoldAll, foldCode, unfoldCode } from '@codemirror/language'
 import { isTagsViewActive, isTasksViewActive, useStore } from '../store'
 import { buildCommands, type Command } from '../lib/commands'
 import { rankItems } from '../lib/fuzzy-score'
+import { BUILTIN_TEMPLATES } from '@shared/builtin-templates'
+import { mergeTemplates } from '@shared/template-files'
 import type { PaneLayout, PaneSplit } from '../lib/pane-layout'
 import {
   parseCreateNotePath,
@@ -348,6 +350,40 @@ function registerVimCommands(): void {
   // `:q` above knows to close the panel instead of closing a note.
   Vim.defineEx('tasks', 'tasks', () => {
     void useStore.getState().openTasksView()
+  })
+
+  // `:template` / `:tmpl` opens the template picker. `:template <name>` skips
+  // the picker and creates directly from the best name/id match. CM-Vim
+  // requires a short name to be a prefix of the full name, so `tmpl` (not a
+  // prefix of `template`) is registered as its own command sharing the handler.
+  const runTemplateEx = (
+    _cm: unknown,
+    params: { argString?: string } | undefined
+  ): void => {
+    const state = useStore.getState()
+    const arg = (params?.argString ?? '').trim()
+    if (!arg) {
+      state.setTemplatePaletteOpen(true)
+      return
+    }
+    const all = mergeTemplates(BUILTIN_TEMPLATES, state.customTemplates)
+    const lower = arg.toLowerCase()
+    const match =
+      all.find((t) => t.name.toLowerCase() === lower) ??
+      all.find((t) => t.id.toLowerCase() === lower) ??
+      all.find((t) => t.name.toLowerCase().includes(lower))
+    if (match) void state.createFromTemplate(match)
+    else state.setTemplatePaletteOpen(true)
+  }
+  Vim.defineEx('template', 'template', runTemplateEx)
+  Vim.defineEx('tmpl', 'tmpl', runTemplateEx)
+
+  Vim.defineEx('daily', 'daily', () => {
+    void useStore.getState().openTodayDailyNote()
+  })
+
+  Vim.defineEx('weekly', 'weekly', () => {
+    void useStore.getState().openThisWeekWeeklyNote()
   })
 
   // `:tag foo` starts (or updates) the Tags view with `foo` selected.
@@ -759,6 +795,10 @@ const MANUAL_EX_NAMES = new Set([
   'format',
   'tasks',
   'tag',
+  'template',
+  'tmpl',
+  'daily',
+  'weekly',
   'split',
   'sp',
   'vsplit',

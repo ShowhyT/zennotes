@@ -36,8 +36,11 @@ export function PromptModal({
 }): JSX.Element {
   const [value, setValue] = useState(options.initialValue ?? '')
   const [error, setError] = useState<string | null>(null)
-  const [suggestionsOpen, setSuggestionsOpen] = useState(false)
-  const [activeSuggestion, setActiveSuggestion] = useState(0)
+  // Suggestions show automatically whenever there are matches; `dismissed`
+  // hides them after Escape. `activeSuggestion` of -1 means the typed value is
+  // selected (Enter submits it); 0..n highlights a suggestion (Enter picks it).
+  const [dismissed, setDismissed] = useState(false)
+  const [activeSuggestion, setActiveSuggestion] = useState(-1)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const suggestionsRef = useRef<HTMLDivElement | null>(null)
 
@@ -70,13 +73,13 @@ export function PromptModal({
     return scored.map((entry) => entry.suggestion).slice(0, 8)
   }, [options.suggestions, value])
 
-  const showSuggestions = suggestionsOpen && filteredSuggestions.length > 0
+  const showSuggestions = !dismissed && filteredSuggestions.length > 0
 
   useEffect(() => {
     setValue(options.initialValue ?? '')
     setError(null)
-    setSuggestionsOpen(false)
-    setActiveSuggestion(0)
+    setDismissed(false)
+    setActiveSuggestion(-1)
   }, [options.initialValue, options.title])
 
   useEffect(() => {
@@ -88,15 +91,15 @@ export function PromptModal({
   }, [])
 
   useEffect(() => {
-    if (!showSuggestions) return
+    if (!showSuggestions || activeSuggestion < 0) return
     const el = suggestionsRef.current?.querySelector<HTMLElement>(
       `[data-prompt-suggestion-idx="${activeSuggestion}"]`
     )
     el?.scrollIntoView({ block: 'nearest' })
   }, [activeSuggestion, showSuggestions])
 
-  const submit = (): void => {
-    const v = value.trim()
+  const submit = (raw: string = value): void => {
+    const v = raw.trim()
     if (!v && !options.allowEmptySubmit) return
     const err = options.validate?.(v) ?? null
     if (err) {
@@ -106,23 +109,23 @@ export function PromptModal({
     onSubmit(v)
   }
 
-  const applySuggestion = (next: PromptSuggestion): void => {
+  // Picking a suggestion submits it directly (e.g. create in that folder).
+  const chooseSuggestion = (next: PromptSuggestion): void => {
     setValue(next.value)
     setError(null)
-    setSuggestionsOpen(false)
-    requestAnimationFrame(() => {
-      inputRef.current?.focus()
-      const len = next.value.length
-      inputRef.current?.setSelectionRange(len, len)
-    })
+    submit(next.value)
   }
 
+  // Cycle through [typed value (-1), suggestion 0 … n-1] and wrap around.
   const moveSuggestion = (delta: number): void => {
-    if (filteredSuggestions.length === 0) return
-    setSuggestionsOpen(true)
+    const n = filteredSuggestions.length
+    if (n === 0) return
+    setDismissed(false)
     setActiveSuggestion((prev) => {
-      const base = suggestionsOpen ? prev : delta > 0 ? -1 : 0
-      return (base + delta + filteredSuggestions.length) % filteredSuggestions.length
+      const next = (prev < 0 ? -1 : prev) + delta
+      if (next < -1) return n - 1
+      if (next >= n) return -1
+      return next
     })
   }
 
@@ -150,17 +153,13 @@ export function PromptModal({
             onChange={(e) => {
               setValue(e.target.value)
               setError(null)
-              if (suggestionsOpen) setActiveSuggestion(0)
+              setActiveSuggestion(-1)
+              setDismissed(false)
             }}
             onKeyDown={(e) => {
               if (e.key === 'Tab' && filteredSuggestions.length > 0) {
                 e.preventDefault()
-                if (!suggestionsOpen) {
-                  setSuggestionsOpen(true)
-                  setActiveSuggestion(0)
-                } else {
-                  moveSuggestion(e.shiftKey ? -1 : 1)
-                }
+                moveSuggestion(e.shiftKey ? -1 : 1)
               } else if (e.key === 'ArrowDown' && filteredSuggestions.length > 0) {
                 e.preventDefault()
                 moveSuggestion(1)
@@ -169,18 +168,17 @@ export function PromptModal({
                 moveSuggestion(-1)
               } else if (e.key === 'Enter') {
                 e.preventDefault()
-                if (showSuggestions) {
-                  const suggestion = filteredSuggestions[activeSuggestion]
-                  if (suggestion && suggestion.value !== value.trim()) {
-                    applySuggestion(suggestion)
-                    return
-                  }
-                }
-                submit()
+                const suggestion =
+                  showSuggestions && activeSuggestion >= 0
+                    ? filteredSuggestions[activeSuggestion]
+                    : null
+                if (suggestion) chooseSuggestion(suggestion)
+                else submit()
               } else if (e.key === 'Escape') {
                 e.preventDefault()
-                if (showSuggestions) {
-                  setSuggestionsOpen(false)
+                if (showSuggestions && !dismissed) {
+                  setDismissed(true)
+                  setActiveSuggestion(-1)
                 } else {
                   onCancel()
                 }
@@ -208,7 +206,7 @@ export function PromptModal({
                       type="button"
                       data-prompt-suggestion-idx={index}
                       onMouseEnter={() => setActiveSuggestion(index)}
-                      onClick={() => applySuggestion(suggestion)}
+                      onClick={() => chooseSuggestion(suggestion)}
                       className={[
                         'flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors',
                         active ? 'bg-paper-200' : 'hover:bg-paper-200/70'
@@ -242,7 +240,7 @@ export function PromptModal({
           </button>
           <button
             type="button"
-            onClick={submit}
+            onClick={() => submit()}
             className="rounded-md bg-ink-900 px-3 py-1.5 text-sm font-medium text-paper-50 hover:bg-ink-800"
           >
             {options.okLabel ?? 'OK'}

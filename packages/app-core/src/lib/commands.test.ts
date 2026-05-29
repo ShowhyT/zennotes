@@ -13,7 +13,8 @@ function installZen(): void {
         supportsFloatingWindows: false,
         supportsLocalFilesystemPickers: true,
         supportsRemoteWorkspace: false,
-        supportsCliInstall: false
+        supportsCliInstall: false,
+        supportsCustomTemplates: false
       }),
       closeVault: vi.fn(),
       openVaultWindow: vi.fn()
@@ -67,7 +68,8 @@ describe('vault commands', () => {
           supportsFloatingWindows: false,
           supportsLocalFilesystemPickers: false,
           supportsRemoteWorkspace: true,
-          supportsCliInstall: false
+          supportsCliInstall: false,
+          supportsCustomTemplates: false
         }),
         openVaultWindow: vi.fn()
       }

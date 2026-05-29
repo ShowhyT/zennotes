@@ -33,6 +33,7 @@ import type {
   VaultTextSearchMatch,
   VaultTextSearchToolPaths
 } from './ipc'
+import type { CustomTemplateFile, WriteTemplateInput } from './templates'
 import type { VaultTask } from '@zennotes/shared-domain/tasks'
 import type {
   McpClientId,
@@ -48,6 +49,8 @@ export interface ZenCapabilities {
   supportsLocalFilesystemPickers: boolean
   supportsRemoteWorkspace: boolean
   supportsCliInstall: boolean
+  /** Custom templates require local-filesystem CRUD; false on web/remote. */
+  supportsCustomTemplates: boolean
 }
 
 export interface ZenAppInfo {
@@ -109,6 +112,10 @@ export interface ZenBridge {
   hasAssetsDir(): Promise<boolean>
   generateDemoTour(): Promise<VaultDemoTourResult>
   removeDemoTour(): Promise<VaultDemoTourResult>
+  listTemplates(): Promise<CustomTemplateFile[]>
+  readTemplate(sourcePath: string): Promise<string>
+  writeTemplate(input: WriteTemplateInput): Promise<CustomTemplateFile>
+  deleteTemplate(sourcePath: string): Promise<void>
   getVaultTextSearchCapabilities(
     paths?: VaultTextSearchToolPaths
   ): Promise<VaultTextSearchCapabilities>

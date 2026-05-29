@@ -155,6 +155,11 @@ const OutlinePalette = lazy(async () => {
   return { default: module.OutlinePalette }
 })
 
+const TemplatePalette = lazy(async () => {
+  const module = await import('./components/TemplatePalette')
+  return { default: module.TemplatePalette }
+})
+
 const SettingsModal = lazy(async () => {
   const module = await import('./components/SettingsModal')
   return { default: module.SettingsModal }
@@ -239,6 +244,8 @@ function App(): JSX.Element {
   const setBufferPaletteOpen = useStore((s) => s.setBufferPaletteOpen)
   const outlinePaletteOpen = useStore((s) => s.outlinePaletteOpen)
   const setOutlinePaletteOpen = useStore((s) => s.setOutlinePaletteOpen)
+  const templatePaletteOpen = useStore((s) => s.templatePaletteOpen)
+  const setTemplatePaletteOpen = useStore((s) => s.setTemplatePaletteOpen)
   const sidebarOpen = useStore((s) => s.sidebarOpen)
   const noteListOpen = useStore((s) => s.noteListOpen)
   const zenMode = useStore((s) => s.zenMode)
@@ -554,6 +561,11 @@ function App(): JSX.Element {
         focusEditorNormalMode()
         return
       }
+      if (e.key === 'Escape' && state.templatePaletteOpen) {
+        setTemplatePaletteOpen(false)
+        focusEditorNormalMode()
+        return
+      }
       if (e.key === 'Escape' && state.outlinePaletteOpen) {
         setOutlinePaletteOpen(false)
         focusEditorNormalMode()
@@ -611,6 +623,7 @@ function App(): JSX.Element {
     setBufferPaletteOpen,
     setCommandPaletteOpen,
     setOutlinePaletteOpen,
+    setTemplatePaletteOpen,
     setSearchOpen,
     setVaultTextSearchOpen
   ])
@@ -683,6 +696,11 @@ function App(): JSX.Element {
       {outlinePaletteOpen && (
         <Suspense fallback={null}>
           <OutlinePalette />
+        </Suspense>
+      )}
+      {templatePaletteOpen && (
+        <Suspense fallback={null}>
+          <TemplatePalette />
         </Suspense>
       )}
       {settingsOpen && (

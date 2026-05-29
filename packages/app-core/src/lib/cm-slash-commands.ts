@@ -139,6 +139,28 @@ export function slashCommandSource(context: CompletionContext): CompletionResult
   }
 }
 
+/**
+ * Slash commands that don't make sense outside a real note. "Page" creates and
+ * opens a new note via the store, which would navigate away from (and is
+ * meaningless inside) the template editor.
+ */
+const NON_TEMPLATE_COMMANDS = new Set(['Page'])
+
+/**
+ * Slash-command source for the template editor: the same block inserters as the
+ * main editor (headings, lists, code block, divider, callout, …) minus the
+ * app-stateful ones like "Page".
+ */
+export function templateSlashCommandSource(
+  context: CompletionContext
+): CompletionResult | null {
+  const result = slashCommandSource(context)
+  if (!result) return null
+  const options = result.options.filter((option) => !NON_TEMPLATE_COMMANDS.has(option.label))
+  if (options.length === 0) return null
+  return { ...result, options }
+}
+
 /** Custom rendering for the slash command completion items. */
 export const slashCommandRender = {
   render: renderCompletion

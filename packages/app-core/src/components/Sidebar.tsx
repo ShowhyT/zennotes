@@ -366,6 +366,8 @@ export function Sidebar(): JSX.Element {
   const tagsViewActive = useStore(isTagsViewActive);
   const setSearchOpen = useStore((s) => s.setSearchOpen);
   const createAndOpen = useStore((s) => s.createAndOpen);
+  const createNoteInChosenFolder = useStore((s) => s.createNoteInChosenFolder);
+  const openTemplatePaletteForFolder = useStore((s) => s.openTemplatePaletteForFolder);
   const quickNoteDateTitle = useStore((s) => s.quickNoteDateTitle);
   const quickNoteTitlePrefix = useStore((s) => s.quickNoteTitlePrefix);
   const toggleSidebar = useStore((s) => s.toggleSidebar);
@@ -808,6 +810,8 @@ export function Sidebar(): JSX.Element {
     folder: NoteFolder;
     subpath: string; // "" for top-level
   } | null>(null);
+  // Right-click on the empty area of the notes tree → create at the vault root.
+  const [rootMenu, setRootMenu] = useState<{ x: number; y: number } | null>(null);
   const [assetMenu, setAssetMenu] = useState<{
     x: number;
     y: number;
@@ -1470,6 +1474,12 @@ export function Sidebar(): JSX.Element {
           await createAndOpen(folder, subpath);
         },
       },
+      {
+        label: "New from template",
+        onSelect: () => {
+          openTemplatePaletteForFolder(folder, subpath);
+        },
+      },
     ];
     if (folder === "quick" && isTop) {
       items.push({
@@ -1643,6 +1653,7 @@ export function Sidebar(): JSX.Element {
     allFolders,
     vault,
     createAndOpen,
+    openTemplatePaletteForFolder,
     openArchiveView,
     openQuickNotesView,
     createFolderAction,
@@ -1663,6 +1674,43 @@ export function Sidebar(): JSX.Element {
     bulkSelectionMenuItems,
     selectedSidebarKeys,
   ]);
+
+  // Items for the empty-area (vault root) context menu.
+  const rootMenuItems = useMemo<ContextMenuItem[]>(
+    () => [
+      {
+        label: "New note",
+        onSelect: async () => {
+          await createAndOpen("inbox", "");
+        },
+      },
+      {
+        label: "New from template",
+        onSelect: () => {
+          openTemplatePaletteForFolder("inbox", "");
+        },
+      },
+      {
+        label: "New folder",
+        onSelect: async () => {
+          const name = await promptApp({
+            title: "New folder at the vault root",
+            placeholder: "Folder name",
+            okLabel: "Create",
+            validate: (v) => (v.includes("/") ? 'Folder name cannot contain "/"' : null),
+          });
+          const clean = name?.trim().replace(/^\/+|\/+$/g, "");
+          if (!clean) return;
+          try {
+            await createFolderAction("inbox", clean);
+          } catch (err) {
+            window.alert((err as Error).message);
+          }
+        },
+      },
+    ],
+    [createAndOpen, openTemplatePaletteForFolder, createFolderAction],
+  );
 
   const noteMenuItems = useMemo<ContextMenuItem[]>(() => {
     if (!noteMenu) return [];
@@ -2391,7 +2439,10 @@ export function Sidebar(): JSX.Element {
           </div>
         )}
         <div className="flex items-center gap-0.5">
-          <IconBtn title="New note" onClick={() => void createAndOpen("inbox")}>
+          <IconBtn
+            title="New note (choose folder)"
+            onClick={() => void createNoteInChosenFolder()}
+          >
             <PlusIcon />
           </IconBtn>
           <IconBtn title="Hide sidebar (⌘1)" onClick={toggleSidebar}>
@@ -2415,14 +2466,17 @@ export function Sidebar(): JSX.Element {
         </button>
         <div className="flex shrink-0 items-center gap-0.5">
           <IconBtn
-            title="New note"
+            title="New note (choose folder)"
             onClick={() => {
               const state = useStore.getState();
               const target = defaultNewNoteTarget(
                 state.activeNote,
                 state.vaultSettings,
               );
-              void createAndOpen(target.folder, target.subpath);
+              // Prefill the picker with the current context (only the notes
+              // area is pickable, so archive/quick fall back to the root).
+              const initialPath = target.folder === "inbox" ? target.subpath : "";
+              void createNoteInChosenFolder({ initialPath });
             }}
           >
             <NotePlusIcon />
@@ -2497,8 +2551,23 @@ export function Sidebar(): JSX.Element {
         onClick={(e) => {
           if (e.target === e.currentTarget) setFocusedPanel("editor");
         }}
+        onContextMenu={(e) => {
+          // Right-clicking the empty area (not a row) creates at the vault root.
+          if (e.target === e.currentTarget) {
+            e.preventDefault();
+            setRootMenu({ x: e.clientX, y: e.clientY });
+          }
+        }}
       >
-        <div className="flex flex-col pb-2">
+        <div
+          className="flex flex-col pb-2"
+          onContextMenu={(e) => {
+            if (e.target === e.currentTarget) {
+              e.preventDefault();
+              setRootMenu({ x: e.clientX, y: e.clientY });
+            }
+          }}
+        >
           <TaskSidebarRow
             active={tasksViewActive}
             onClick={() => void openTasksView()}
@@ -2819,6 +2888,14 @@ export function Sidebar(): JSX.Element {
           y={folderMenu.y}
           items={folderMenuItems}
           onClose={() => setFolderMenu(null)}
+        />
+      )}
+      {rootMenu && (
+        <ContextMenu
+          x={rootMenu.x}
+          y={rootMenu.y}
+          items={rootMenuItems}
+          onClose={() => setRootMenu(null)}
         />
       )}
       {noteMenu && (

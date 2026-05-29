@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     "./bridge": "./src/bridge.ts",
-    "./ipc": "./src/ipc.ts"
+    "./ipc": "./src/ipc.ts",
+    "./templates": "./src/templates.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

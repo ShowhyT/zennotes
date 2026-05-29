@@ -7,6 +7,7 @@ import { app } from 'electron'
 import { recordMainPerf } from './perf'
 import {
   DEFAULT_DAILY_NOTES_DIRECTORY,
+  DEFAULT_WEEKLY_NOTES_DIRECTORY,
   AssetMeta,
   DeletedAsset,
   type FolderIconId,
@@ -130,6 +131,10 @@ const DEFAULT_VAULT_SETTINGS: VaultSettings = {
   dailyNotes: {
     enabled: false,
     directory: DEFAULT_DAILY_NOTES_DIRECTORY
+  },
+  weeklyNotes: {
+    enabled: false,
+    directory: DEFAULT_WEEKLY_NOTES_DIRECTORY
   },
   folderIcons: {}
 }
@@ -616,7 +621,13 @@ function cloneVaultSettings(settings: VaultSettings): VaultSettings {
     primaryNotesLocation: settings.primaryNotesLocation,
     dailyNotes: {
       enabled: settings.dailyNotes.enabled,
-      directory: settings.dailyNotes.directory
+      directory: settings.dailyNotes.directory,
+      templateId: settings.dailyNotes.templateId
+    },
+    weeklyNotes: {
+      enabled: settings.weeklyNotes.enabled,
+      directory: settings.weeklyNotes.directory,
+      templateId: settings.weeklyNotes.templateId
     },
     folderIcons: { ...settings.folderIcons }
   }
@@ -626,6 +637,18 @@ function normalizeDailyNotesDirectory(value: unknown): string {
   if (typeof value !== 'string') return DEFAULT_DAILY_NOTES_DIRECTORY
   const trimmed = value.trim().replace(/^\/+|\/+$/g, '')
   return trimmed || DEFAULT_DAILY_NOTES_DIRECTORY
+}
+
+function normalizeWeeklyNotesDirectory(value: unknown): string {
+  if (typeof value !== 'string') return DEFAULT_WEEKLY_NOTES_DIRECTORY
+  const trimmed = value.trim().replace(/^\/+|\/+$/g, '')
+  return trimmed || DEFAULT_WEEKLY_NOTES_DIRECTORY
+}
+
+function normalizeTemplateId(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed || undefined
 }
 
 function normalizePrimaryNotesLocation(value: unknown): PrimaryNotesLocation {
@@ -643,12 +666,17 @@ function normalizeVaultSettings(
         enabled: DEFAULT_VAULT_SETTINGS.dailyNotes.enabled,
         directory: DEFAULT_DAILY_NOTES_DIRECTORY
       },
+      weeklyNotes: {
+        enabled: DEFAULT_VAULT_SETTINGS.weeklyNotes.enabled,
+        directory: DEFAULT_WEEKLY_NOTES_DIRECTORY
+      },
       folderIcons: {}
     }
   }
   const candidate = value as {
     primaryNotesLocation?: unknown
-    dailyNotes?: { enabled?: unknown; directory?: unknown } | null
+    dailyNotes?: { enabled?: unknown; directory?: unknown; templateId?: unknown } | null
+    weeklyNotes?: { enabled?: unknown; directory?: unknown; templateId?: unknown } | null
     folderIcons?: Record<string, unknown> | null
   }
   const folderIcons: Record<string, FolderIconId> = {}
@@ -667,7 +695,16 @@ function normalizeVaultSettings(
         typeof candidate.dailyNotes?.enabled === 'boolean'
           ? candidate.dailyNotes.enabled
           : DEFAULT_VAULT_SETTINGS.dailyNotes.enabled,
-      directory: normalizeDailyNotesDirectory(candidate.dailyNotes?.directory)
+      directory: normalizeDailyNotesDirectory(candidate.dailyNotes?.directory),
+      templateId: normalizeTemplateId(candidate.dailyNotes?.templateId)
+    },
+    weeklyNotes: {
+      enabled:
+        typeof candidate.weeklyNotes?.enabled === 'boolean'
+          ? candidate.weeklyNotes.enabled
+          : DEFAULT_VAULT_SETTINGS.weeklyNotes.enabled,
+      directory: normalizeWeeklyNotesDirectory(candidate.weeklyNotes?.directory),
+      templateId: normalizeTemplateId(candidate.weeklyNotes?.templateId)
     },
     folderIcons
   }
@@ -2267,13 +2304,28 @@ function pastedImageBuffer(data: PastedImageInput['data']): Buffer {
   throw new Error('Clipboard image data is invalid.')
 }
 
+/**
+ * Make a title safe to use as a filename on macOS, Windows, and Linux:
+ * strip path separators, control chars, and reserved characters so a title
+ * like "RFC / Design Doc" cannot escape into a nonexistent subdirectory.
+ */
+function sanitizeNoteTitle(raw: string | undefined): string {
+  return (
+    (raw ?? '')
+      .replace(/[\\/:\u0000-\u001f*?"<>|]/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 200) || 'Untitled'
+  )
+}
+
 export async function createNote(
   root: string,
   folder: NoteFolder,
   title?: string,
   subpath = ''
 ): Promise<NoteMeta> {
-  const base = (title && title.trim()) || 'Untitled'
+  const base = sanitizeNoteTitle(title)
   const clean = subpath.replace(/^\/+|\/+$/g, '')
   const topRoot = await folderRoot(root, folder)
   const dir = clean ? resolveSafe(topRoot, clean) : topRoot
@@ -2317,7 +2369,7 @@ export async function renameNote(
   const folder = folderOf(root, abs)
   if (!folder) throw new Error(`Note not in a known folder: ${rel}`)
   const dir = path.dirname(abs)
-  const trimmed = nextTitle.trim() || 'Untitled'
+  const trimmed = sanitizeNoteTitle(nextTitle)
   const target = path.join(dir, `${trimmed}.md`)
   if (target !== abs) {
     // Check for conflicts, but allow case-only renames on case-insensitive FS

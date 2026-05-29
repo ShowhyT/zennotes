@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { DEFAULT_DAILY_NOTES_DIRECTORY } from '@shared/ipc'
+import { DEFAULT_DAILY_NOTES_DIRECTORY, DEFAULT_WEEKLY_NOTES_DIRECTORY } from '@shared/ipc'
 import type {
   AppUpdateState,
   CliInstallStatus,
@@ -36,7 +36,11 @@ import {
   DEFAULT_SYSTEM_FOLDER_LABELS,
   getSystemFolderLabel
 } from '../lib/system-folder-labels'
-import { normalizeDailyNotesDirectory } from '../lib/vault-layout'
+import { normalizeDailyNotesDirectory, normalizeWeeklyNotesDirectory } from '../lib/vault-layout'
+import { BUILTIN_TEMPLATES } from '@shared/builtin-templates'
+import { composeTemplateFile, mergeTemplates } from '@shared/template-files'
+import { TemplateEditorModal } from './TemplateEditorModal'
+import type { NoteTemplate } from '@bridge-contract/templates'
 import {
   getSettingsSearchResults,
   type SettingsSearchCategory
@@ -53,6 +57,7 @@ type SettingsCategoryId =
   | 'keymaps'
   | 'typography'
   | 'vault'
+  | 'templates'
   | 'mcp'
   | 'cli'
   | 'about'
@@ -242,6 +247,60 @@ export function SettingsModal(): JSX.Element {
   const saveRemoteWorkspaceProfile = useStore((s) => s.saveRemoteWorkspaceProfile)
   const deleteRemoteWorkspaceProfile = useStore((s) => s.deleteRemoteWorkspaceProfile)
   const openTodayDailyNote = useStore((s) => s.openTodayDailyNote)
+  const openThisWeekWeeklyNote = useStore((s) => s.openThisWeekWeeklyNote)
+  const customTemplates = useStore((s) => s.customTemplates)
+  const deleteCustomTemplate = useStore((s) => s.deleteCustomTemplate)
+  const allTemplates = useMemo(
+    () => mergeTemplates(BUILTIN_TEMPLATES, customTemplates),
+    [customTemplates]
+  )
+  const supportsCustomTemplates =
+    zenBridge.getCapabilities().supportsCustomTemplates && workspaceMode !== 'remote'
+  const [templateEditor, setTemplateEditor] = useState<{
+    initialRaw?: string
+    sourcePath?: string
+  } | null>(null)
+  const openTemplateEditor = async (template: NoteTemplate): Promise<void> => {
+    if (!template.sourcePath) return
+    try {
+      const raw = await window.zen.readTemplate(template.sourcePath)
+      setTemplateEditor({ initialRaw: raw, sourcePath: template.sourcePath })
+    } catch (err) {
+      console.error('readTemplate failed', err)
+    }
+  }
+  // Editing a built-in forks it into an editable custom file (carrying the
+  // built-in's id), which then shadows the built-in everywhere.
+  const editBuiltinTemplate = (template: NoteTemplate): void => {
+    setTemplateEditor({
+      initialRaw: composeTemplateFile({
+        name: template.name,
+        description: template.description,
+        category: template.category,
+        titleTemplate: template.titleTemplate,
+        targetFolder: template.targetFolder,
+        targetSubpath: template.targetSubpath,
+        builtinId: template.id,
+        body: template.body
+      })
+    })
+  }
+  const removeTemplate = async (template: NoteTemplate): Promise<void> => {
+    if (!template.sourcePath) return
+    const isOverride = !!template.builtinId
+    const confirmed = await confirmApp({
+      title: isOverride
+        ? `Reset “${template.name}” to the built-in?`
+        : `Delete template “${template.name}”?`,
+      description: isOverride
+        ? 'This removes your customizations and restores the built-in template.'
+        : 'This removes the template file. Notes already created from it are unaffected.',
+      confirmLabel: isOverride ? 'Reset' : 'Delete',
+      danger: true
+    })
+    if (!confirmed) return
+    await deleteCustomTemplate(template.sourcePath)
+  }
   const themeId = useStore((s) => s.themeId)
   const themeFamily = useStore((s) => s.themeFamily)
   const themeMode = useStore((s) => s.themeMode)
@@ -572,11 +631,16 @@ export function SettingsModal(): JSX.Element {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setSettingsOpen(false)
+      // Don't close Settings on Esc while a nested editor/modal is open —
+      // that would discard in-progress work (e.g. a template draft). Those
+      // modals handle Esc themselves (Vim normal mode, etc.).
+      if (e.key === 'Escape' && !templateEditor && !editingRemoteProfile) {
+        setSettingsOpen(false)
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [setSettingsOpen])
+  }, [setSettingsOpen, templateEditor, editingRemoteProfile])
 
   useEffect(() => {
     return () => {
@@ -1285,6 +1349,36 @@ export function SettingsModal(): JSX.Element {
           keywords: ['daily notes', 'today']
         },
         {
+          id: 'daily-notes-template',
+          title: 'Daily note template',
+          description: 'Template applied when a daily note is created.',
+          keywords: ['daily notes', 'template']
+        },
+        {
+          id: 'enable-weekly-notes',
+          title: 'Enable weekly notes',
+          description: 'Adds a dedicated weekly-notes workflow alongside daily notes.',
+          keywords: ['weekly notes']
+        },
+        {
+          id: 'weekly-notes-directory',
+          title: 'Weekly notes directory',
+          description: 'Stored inside your primary notes area.',
+          keywords: ['weekly notes', 'directory', 'folder']
+        },
+        {
+          id: 'weekly-notes-template',
+          title: 'Weekly note template',
+          description: 'Template applied when a weekly note is created.',
+          keywords: ['weekly notes', 'template']
+        },
+        {
+          id: 'open-this-week-note',
+          title: "Open this week's note",
+          description: "Opens this week's note if it exists, otherwise creates it.",
+          keywords: ['weekly notes', 'this week']
+        },
+        {
           id: 'inbox-label',
           title: 'Inbox label',
           description: 'Shown in the sidebar, breadcrumbs, commands, and note actions.',
@@ -1508,6 +1602,19 @@ export function SettingsModal(): JSX.Element {
                 })
               }
             />
+            <TemplateSelectRow
+              label="Daily note template"
+              description="Applied when a daily note is created. None creates a blank note."
+              value={vaultSettings.dailyNotes.templateId}
+              templates={allTemplates}
+              settingId="daily-notes-template"
+              onChange={(templateId) =>
+                void persistVaultSettings({
+                  ...vaultSettings,
+                  dailyNotes: { ...vaultSettings.dailyNotes, templateId }
+                })
+              }
+            />
             <div
               className="flex items-center justify-between gap-4 px-5 py-4"
               {...settingsSearchTargetProps('open-todays-daily-note')}
@@ -1530,6 +1637,80 @@ export function SettingsModal(): JSX.Element {
                 ].join(' ')}
               >
                 Open today
+              </button>
+            </div>
+          </Section>
+
+          <Section
+            title="Weekly Notes"
+            description="Create one note per ISO week with a YYYY-Www title and keep them in a dedicated directory."
+          >
+            <ToggleRow
+              label="Enable weekly notes"
+              description="Adds a dedicated weekly-notes workflow alongside daily notes."
+              value={vaultSettings.weeklyNotes.enabled}
+              settingId="enable-weekly-notes"
+              onChange={(enabled) =>
+                void persistVaultSettings({
+                  ...vaultSettings,
+                  weeklyNotes: {
+                    ...vaultSettings.weeklyNotes,
+                    enabled
+                  }
+                })
+              }
+            />
+            <TextInputRow
+              label="Weekly notes directory"
+              description="Stored inside your primary notes area. The default is `Weekly Notes`."
+              value={vaultSettings.weeklyNotes.directory}
+              placeholder={DEFAULT_WEEKLY_NOTES_DIRECTORY}
+              settingId="weekly-notes-directory"
+              onChange={(next) =>
+                void persistVaultSettings({
+                  ...vaultSettings,
+                  weeklyNotes: {
+                    ...vaultSettings.weeklyNotes,
+                    directory: normalizeWeeklyNotesDirectory(next)
+                  }
+                })
+              }
+            />
+            <TemplateSelectRow
+              label="Weekly note template"
+              description="Applied when a weekly note is created. None creates a blank note."
+              value={vaultSettings.weeklyNotes.templateId}
+              templates={allTemplates}
+              settingId="weekly-notes-template"
+              onChange={(templateId) =>
+                void persistVaultSettings({
+                  ...vaultSettings,
+                  weeklyNotes: { ...vaultSettings.weeklyNotes, templateId }
+                })
+              }
+            />
+            <div
+              className="flex items-center justify-between gap-4 px-5 py-4"
+              {...settingsSearchTargetProps('open-this-week-note')}
+            >
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-ink-900">Open this week's note</div>
+                <div className="mt-1 text-xs leading-5 text-ink-500">
+                  Opens this week's note if it exists, otherwise creates it with a YYYY-Www title.
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={!vaultSettings.weeklyNotes.enabled}
+                onClick={() => void openThisWeekWeeklyNote()}
+                className={[
+                  'shrink-0 rounded-xl border px-3.5 py-2 text-xs font-medium transition-colors',
+                  vaultSettings.weeklyNotes.enabled
+                    ? 'border-paper-300/70 bg-paper-100/80 text-ink-800 hover:bg-paper-200'
+                    : 'cursor-not-allowed border-paper-300/60 bg-paper-100/45 text-ink-400'
+                ].join(' ')}
+              >
+                Open this week
               </button>
             </div>
           </Section>
@@ -1573,6 +1754,128 @@ export function SettingsModal(): JSX.Element {
             <InlineNote>
               Current labels: {getSystemFolderLabel('quick', systemFolderLabels)}, {getSystemFolderLabel('inbox', systemFolderLabels)}, {getSystemFolderLabel('archive', systemFolderLabels)}, and {getSystemFolderLabel('trash', systemFolderLabels)}.
             </InlineNote>
+          </Section>
+        </div>
+      )
+    },
+    {
+      id: 'templates',
+      title: 'Templates',
+      description:
+        'Built-in templates plus your own. Create a note from any of them with `Space t`, `:template`, or the command palette.',
+      keywords: [
+        'templates',
+        'template',
+        'adr',
+        'rfc',
+        'meeting',
+        'daily',
+        'weekly',
+        'journal',
+        'custom',
+        'scaffold',
+        'boilerplate'
+      ],
+      searchItems: [
+        {
+          id: 'templates-list',
+          title: 'Template library',
+          description: 'Browse built-in templates and manage your custom ones.',
+          keywords: ['templates', 'library', 'built-in', 'custom']
+        },
+        {
+          id: 'templates-new',
+          title: 'Create a custom template',
+          description: 'Author a new template stored in .zennotes/templates.',
+          keywords: ['template', 'new', 'create', 'custom'],
+          available: supportsCustomTemplates
+        }
+      ],
+      content: (
+        <div className="space-y-6">
+          <Section
+            title="Templates"
+            description="Pick any of these from the template picker (`Space t`, `:template`). Built-in templates are read-only; your custom ones can be edited or deleted."
+            settingId="templates-list"
+          >
+            {supportsCustomTemplates ? (
+              <div
+                className="flex items-center justify-between gap-4 px-5 py-4"
+                {...settingsSearchTargetProps('templates-new')}
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-ink-900">Create a custom template</div>
+                  <div className="mt-1 text-xs leading-5 text-ink-500">
+                    Stored as a markdown file in `.zennotes/templates`.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setTemplateEditor({})}
+                  className="shrink-0 rounded-xl bg-ink-900 px-3.5 py-2 text-xs font-medium text-paper-50 hover:bg-ink-800"
+                >
+                  New template
+                </button>
+              </div>
+            ) : (
+              <InlineNote>
+                Custom templates require a local vault. Built-in templates still work here.
+              </InlineNote>
+            )}
+            {allTemplates.map((template) => (
+              <div
+                key={template.id}
+                className="flex items-center justify-between gap-4 px-5 py-3"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-ink-900">{template.name}</div>
+                  <div className="mt-0.5 truncate text-xs text-ink-500">
+                    {template.category}
+                    {template.description ? ` — ${template.description}` : ''}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {template.builtin && (
+                    <span className="rounded-md bg-paper-200 px-2 py-1 text-[11px] uppercase tracking-wide text-ink-400">
+                      Built-in
+                    </span>
+                  )}
+                  {!template.builtin && template.builtinId && (
+                    <span className="rounded-md bg-paper-200 px-2 py-1 text-[11px] uppercase tracking-wide text-ink-400">
+                      Customized
+                    </span>
+                  )}
+                  {template.builtin
+                    ? supportsCustomTemplates && (
+                        <button
+                          type="button"
+                          onClick={() => editBuiltinTemplate(template)}
+                          className="rounded-lg border border-paper-300/70 bg-paper-100/80 px-3 py-1.5 text-xs font-medium text-ink-800 hover:bg-paper-200"
+                        >
+                          Edit
+                        </button>
+                      )
+                    : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void openTemplateEditor(template)}
+                          className="rounded-lg border border-paper-300/70 bg-paper-100/80 px-3 py-1.5 text-xs font-medium text-ink-800 hover:bg-paper-200"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void removeTemplate(template)}
+                          className="rounded-lg border border-red-500/30 bg-paper-100/80 px-3 py-1.5 text-xs font-medium text-[rgb(var(--z-red))] hover:bg-red-500/10"
+                        >
+                          {template.builtinId ? 'Reset' : 'Delete'}
+                        </button>
+                      </>
+                    )}
+                </div>
+              </div>
+            ))}
           </Section>
         </div>
       )
@@ -1999,6 +2302,13 @@ export function SettingsModal(): JSX.Element {
           }}
           onSubmit={submitRemoteProfile}
           onCancel={() => setEditingRemoteProfile(null)}
+        />
+      )}
+      {templateEditor && (
+        <TemplateEditorModal
+          initialRaw={templateEditor.initialRaw}
+          sourcePath={templateEditor.sourcePath}
+          onClose={() => setTemplateEditor(null)}
         />
       )}
     </>
@@ -2529,6 +2839,54 @@ function TextInputRow({
         placeholder={placeholder}
         className="w-[23rem] max-w-[50vw] rounded-xl border border-paper-300/70 bg-paper-100/80 px-3 py-2 text-sm text-ink-900 outline-none placeholder:text-ink-400 focus:border-accent/45"
       />
+    </div>
+  )
+}
+
+function TemplateSelectRow({
+  label,
+  description,
+  value,
+  templates,
+  settingId,
+  onChange
+}: {
+  label: string
+  description?: string
+  value: string | undefined
+  templates: NoteTemplate[]
+  settingId?: string
+  onChange: (templateId: string | undefined) => void
+}): JSX.Element {
+  // A configured template that no longer exists (deleted) shows as missing so
+  // the user can pick a replacement; daily/weekly creation falls back to blank.
+  const missing = !!value && !templates.some((t) => t.id === value)
+  return (
+    <div
+      className="flex items-center justify-between gap-5 px-5 py-4"
+      {...settingsSearchTargetProps(settingId)}
+    >
+      <div className="min-w-0">
+        <div className="text-sm font-medium text-ink-900">{label}</div>
+        {description && <div className="mt-1 text-xs leading-5 text-ink-500">{description}</div>}
+      </div>
+      <select
+        value={missing ? '__missing__' : value ?? ''}
+        onChange={(e) => onChange(e.target.value ? e.target.value : undefined)}
+        className="w-[23rem] max-w-[50vw] rounded-xl border border-paper-300/70 bg-paper-100/80 px-3 py-2 text-sm text-ink-900 outline-none focus:border-accent/45"
+      >
+        <option value="">None (blank note)</option>
+        {missing && (
+          <option value="__missing__" disabled>
+            [Missing template]
+          </option>
+        )}
+        {templates.map((template) => (
+          <option key={template.id} value={template.id}>
+            {template.category} — {template.name}
+          </option>
+        ))}
+      </select>
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import {
   DEFAULT_DAILY_NOTES_DIRECTORY,
+  DEFAULT_WEEKLY_NOTES_DIRECTORY,
   DEFAULT_VAULT_SETTINGS,
   type AssetMeta,
   type FolderIconId,
@@ -7,6 +8,7 @@ import {
   type NoteMeta,
   type VaultSettings
 } from '@shared/ipc'
+import { getISOWeek, getISOWeekYear } from './template-render'
 
 const SYSTEM_FOLDERS = new Set<NoteFolder>(['inbox', 'quick', 'archive', 'trash'])
 const RESERVED_ROOT_NAMES = new Set<string>([
@@ -63,6 +65,16 @@ export function normalizeDailyNotesDirectory(directory: string | null | undefine
   return trimmed || DEFAULT_DAILY_NOTES_DIRECTORY
 }
 
+export function normalizeWeeklyNotesDirectory(directory: string | null | undefined): string {
+  const trimmed = (directory ?? '').trim().replace(/^\/+|\/+$/g, '')
+  return trimmed || DEFAULT_WEEKLY_NOTES_DIRECTORY
+}
+
+function normalizeTemplateId(value: string | null | undefined): string | undefined {
+  const trimmed = (value ?? '').trim()
+  return trimmed || undefined
+}
+
 export function normalizeVaultSettings(
   settings: VaultSettings | null | undefined
 ): VaultSettings {
@@ -81,7 +93,13 @@ export function normalizeVaultSettings(
         : DEFAULT_VAULT_SETTINGS.primaryNotesLocation,
     dailyNotes: {
       enabled: !!settings?.dailyNotes?.enabled,
-      directory: normalizeDailyNotesDirectory(settings?.dailyNotes?.directory)
+      directory: normalizeDailyNotesDirectory(settings?.dailyNotes?.directory),
+      templateId: normalizeTemplateId(settings?.dailyNotes?.templateId)
+    },
+    weeklyNotes: {
+      enabled: !!settings?.weeklyNotes?.enabled,
+      directory: normalizeWeeklyNotesDirectory(settings?.weeklyNotes?.directory),
+      templateId: normalizeTemplateId(settings?.weeklyNotes?.templateId)
     },
     folderIcons: normalizedFolderIcons
   }
@@ -189,6 +207,10 @@ export function noteBelongsToFolderView(
 
 export function noteTitleForDate(date = new Date()): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+export function weeklyNoteTitle(date = new Date()): string {
+  return `${getISOWeekYear(date)}-W${pad(getISOWeek(date))}`
 }
 
 export function folderForVaultRelativePath(

@@ -2859,6 +2859,10 @@ textarea,
   overflow: hidden !important;
   padding: 4px !important;
   min-width: 240px;
+  /* Float above modals (e.g. the z-[80] template editor) when the tooltip is
+   * rendered on <body>. Autocomplete only shows while a CodeMirror editor is
+   * focused, so it should always sit on top of whatever surface hosts it. */
+  z-index: 200 !important;
 }
 
 .cm-tooltip-autocomplete > ul {

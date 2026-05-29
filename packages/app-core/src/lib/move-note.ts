@@ -64,6 +64,85 @@ export function parseMoveNoteTarget(value: string): MoveNoteDestination {
   }
 }
 
+/**
+ * Resolve the destination chosen in the template destination prompt. The value
+ * is a folder path relative to the notes area (what the sidebar shows): empty
+ * means the vault root. The notes root is `inbox` internally, so a leading
+ * `inbox/` (or bare `inbox`) is treated as the root too.
+ */
+export function parseTemplateDestination(value: string): MoveNoteDestination {
+  let sub = normalizeMoveTarget(value)
+  if (sub === 'inbox') sub = ''
+  else if (sub.startsWith('inbox/')) sub = sub.slice('inbox/'.length)
+  return { folder: 'inbox', subpath: sub }
+}
+
+/**
+ * Folder suggestions for creating a new note, mirroring the sidebar NOTES tree:
+ * the vault root plus its real subfolders. Excludes `archive` (a separate
+ * lifecycle area) and the redundant bare `inbox` (which is the root itself).
+ */
+function buildNotesFolderSuggestions(folders: FolderEntry[]): PromptSuggestion[] {
+  const out: PromptSuggestion[] = [{ value: '', label: 'Vault root' }]
+  const seen = new Set<string>([''])
+  for (const folder of folders) {
+    if (folder.folder !== 'inbox') continue // notes area only
+    const sub = normalizeMoveTarget(folder.subpath)
+    if (!sub || seen.has(sub)) continue
+    seen.add(sub)
+    const parts = sub.split('/')
+    out.push({ value: sub, detail: parts.slice(0, -1).join('/') || 'Vault root' })
+  }
+  return out.sort((a, b) => {
+    const aDepth = a.value === '' ? -1 : a.value.split('/').length
+    const bDepth = b.value === '' ? -1 : b.value.split('/').length
+    return aDepth - bDepth || a.value.localeCompare(b.value)
+  })
+}
+
+/**
+ * Prompt for where a new note should be created. Defaults to `initialPath`
+ * (empty = vault root): pressing Enter creates there immediately, or type /
+ * pick a folder (the ones shown in the sidebar) to place it elsewhere.
+ */
+export function buildNoteDestinationPrompt(
+  initialPath: string,
+  folders: FolderEntry[]
+): PromptOptions {
+  return {
+    title: 'New note in…',
+    description: 'Press Enter to create at the vault root, or type / pick a folder like Work/Research.',
+    initialValue: normalizeMoveTarget(initialPath),
+    placeholder: 'Vault root — type a folder to change',
+    okLabel: 'Create',
+    allowEmptySubmit: true,
+    suggestions: buildNotesFolderSuggestions(folders),
+    suggestionsHint: 'Empty = vault root · ↑↓ pick a folder · Enter create'
+  }
+}
+
+/**
+ * Prompt for where a new template note should be created. Defaults to the
+ * vault root: pressing Enter creates there immediately. Type a path or use the
+ * suggestions (the folders you see in the sidebar) to quickly pick a folder.
+ */
+export function buildTemplateDestinationPrompt(
+  templateName: string,
+  initialPath: string,
+  folders: FolderEntry[]
+): PromptOptions {
+  return {
+    title: `Create "${templateName}" in…`,
+    description: 'Press Enter to create at the vault root, or type / pick a folder like Work/Research.',
+    initialValue: normalizeMoveTarget(initialPath),
+    placeholder: 'Vault root — type a folder to change',
+    okLabel: 'Create',
+    allowEmptySubmit: true,
+    suggestions: buildNotesFolderSuggestions(folders),
+    suggestionsHint: 'Empty = vault root · ↑↓ pick a folder · Enter create'
+  }
+}
+
 export function buildMoveNotePrompt(
   note: Pick<NoteMeta, 'title' | 'path'>,
   folders: FolderEntry[]
@@ -75,7 +154,7 @@ export function buildMoveNotePrompt(
     placeholder: 'inbox/Work',
     okLabel: 'Move',
     suggestions: buildMoveNoteSuggestions(folders),
-    suggestionsHint: 'Tab browse folders, ↑↓ move, Enter accept',
+    suggestionsHint: '↑↓ pick a folder · Enter to move',
     validate: validateMoveNoteTarget
   }
 }

@@ -44,6 +44,11 @@ import { formatMarkdown } from './lib/format-markdown'
 import { confirmMoveToTrash } from './lib/confirm-trash'
 import { pickServerDirectoryApp } from './lib/server-directory-picker-requests'
 import { promptApp } from './lib/prompt-requests'
+import {
+  buildNoteDestinationPrompt,
+  buildTemplateDestinationPrompt,
+  parseTemplateDestination
+} from './lib/move-note'
 import type { KeymapId, KeymapOverrides } from './lib/keymaps'
 import { normalizeKeymapOverrides } from './lib/keymaps'
 import {
@@ -61,12 +66,23 @@ import {
   folderForVaultRelativePath,
   isPrimaryNotesAtRoot,
   normalizeDailyNotesDirectory,
+  normalizeWeeklyNotesDirectory,
   removeFolderIcons,
   normalizeVaultSettings,
   noteFolderSubpath,
   noteTitleForDate,
+  weeklyNoteTitle,
   rewriteFolderIconsForRename
 } from './lib/vault-layout'
+import { renderTemplate, renderTitle } from './lib/template-render'
+import type { NoteTemplate } from '@bridge-contract/templates'
+import { BUILTIN_TEMPLATES } from '@shared/builtin-templates'
+import {
+  composeTemplateFile,
+  mergeTemplates,
+  parseCustomTemplate,
+  slugifyTemplateName
+} from '@shared/template-files'
 import {
   INITIAL_VISIBLE_NOTE_PREFETCH_BATCH_SIZE,
   selectInitialVisibleNotePrefetchPaths
@@ -170,7 +186,16 @@ async function listNotesFromBridge(): Promise<NoteMeta[]> {
 
 async function refreshVaultIndexes(): Promise<void> {
   const state = useStore.getState()
-  await Promise.all([state.refreshNotes(), state.refreshAssets()])
+  await Promise.all([state.refreshNotes(), state.refreshAssets(), state.loadCustomTemplates()])
+}
+
+/** Find a template (built-in or custom) by id, or undefined if it's gone. */
+function resolveTemplate(
+  customTemplates: NoteTemplate[],
+  id: string | undefined
+): NoteTemplate | undefined {
+  if (!id) return undefined
+  return mergeTemplates(BUILTIN_TEMPLATES, customTemplates).find((t) => t.id === id)
 }
 
 function isDeletedAssetRecord(value: unknown): value is DeletedAsset {
@@ -181,6 +206,32 @@ function isDeletedAssetRecord(value: unknown): value is DeletedAsset {
     typeof candidate.name === 'string' &&
     typeof candidate.undoToken === 'string'
   )
+}
+
+/** The editor-pane right-side panels whose width the user can drag-resize. */
+export type RightPanelId = 'outline' | 'connections' | 'comments'
+export interface PanelWidths {
+  outline: number
+  connections: number
+  comments: number
+}
+export const MIN_RIGHT_PANEL_WIDTH = 200
+export const MAX_RIGHT_PANEL_WIDTH = 640
+export const DEFAULT_PANEL_WIDTHS: PanelWidths = {
+  outline: 260,
+  connections: 288,
+  comments: 360
+}
+
+function clampPanelWidth(px: number): number {
+  return Math.min(MAX_RIGHT_PANEL_WIDTH, Math.max(MIN_RIGHT_PANEL_WIDTH, Math.round(px)))
+}
+
+function normalizePanelWidths(value: unknown): PanelWidths {
+  const v = (value ?? {}) as Partial<Record<RightPanelId, unknown>>
+  const pick = (key: RightPanelId): number =>
+    typeof v[key] === 'number' ? clampPanelWidth(v[key] as number) : DEFAULT_PANEL_WIDTHS[key]
+  return { outline: pick('outline'), connections: pick('connections'), comments: pick('comments') }
 }
 
 interface Prefs {
@@ -237,6 +288,7 @@ interface Prefs {
   pinnedRefPath: string | null
   pinnedRefVisible: boolean
   pinnedRefWidth: number
+  panelWidths: PanelWidths
   pinnedRefMode: 'edit' | 'preview'
   /** When true, "New Quick Note" auto-titles to today's date
    *  (YYYY-MM-DD), appending " (2)", " (3)" etc. for collisions. */
@@ -357,6 +409,7 @@ const DEFAULT_PREFS: Prefs = {
   pinnedRefPath: null,
   pinnedRefVisible: true,
   pinnedRefWidth: 420,
+  panelWidths: DEFAULT_PANEL_WIDTHS,
   pinnedRefMode: 'edit',
   quickNoteDateTitle: false,
   quickNoteTitlePrefix: 'Quick Note',
@@ -499,6 +552,7 @@ function normalizePrefs(p: Partial<Prefs>): Prefs {
       typeof p.pinnedRefWidth === 'number'
         ? Math.min(800, Math.max(280, p.pinnedRefWidth))
         : DEFAULT_PREFS.pinnedRefWidth,
+    panelWidths: normalizePanelWidths(p.panelWidths),
     pinnedRefMode:
       p.pinnedRefMode === 'edit' || p.pinnedRefMode === 'preview'
         ? p.pinnedRefMode
@@ -953,6 +1007,7 @@ function collectPrefs(s: {
   pinnedRefPath: string | null
   pinnedRefVisible: boolean
   pinnedRefWidth: number
+  panelWidths: PanelWidths
   pinnedRefMode: 'edit' | 'preview'
   quickNoteDateTitle: boolean
   quickNoteTitlePrefix: string | null
@@ -1004,6 +1059,7 @@ function collectPrefs(s: {
     pinnedRefPath: s.pinnedRefPath,
     pinnedRefVisible: s.pinnedRefVisible,
     pinnedRefWidth: s.pinnedRefWidth,
+    panelWidths: s.panelWidths,
     pinnedRefMode: s.pinnedRefMode,
     quickNoteDateTitle: s.quickNoteDateTitle,
     quickNoteTitlePrefix: s.quickNoteTitlePrefix,
@@ -1297,6 +1353,15 @@ interface Store {
   commandPaletteInitialMode: CommandPaletteInitialMode
   bufferPaletteOpen: boolean
   outlinePaletteOpen: boolean
+  templatePaletteOpen: boolean
+  /** 'create' makes a new note from the picked template; 'insert' renders it
+   *  into the active note instead. */
+  templatePaletteMode: 'create' | 'insert'
+  /** When set, the template picker creates in this folder (set by right-click);
+   *  null means prompt the user for a destination. */
+  templatePaletteTarget: { folder: NoteFolder; subpath: string } | null
+  /** Custom templates loaded from `.zennotes/templates/` (built-ins are constants). */
+  customTemplates: NoteTemplate[]
   query: string
   initialized: boolean
   workspaceRestored: boolean
@@ -1344,6 +1409,7 @@ interface Store {
   pinnedRefPath: string | null
   pinnedRefVisible: boolean
   pinnedRefWidth: number
+  panelWidths: PanelWidths
   pinnedRefMode: 'edit' | 'preview'
 
   /** Auto-title new Quick Notes to today's date instead of the
@@ -1519,6 +1585,13 @@ interface Store {
     options?: { focusTitle?: boolean; title?: string }
   ) => Promise<void>
   /**
+   * Create a note after asking where to put it: a destination prompt that
+   * defaults to `initialPath` (empty = vault root), so the user can press Enter
+   * to accept or type / pick a folder. Used by the sidebar's "+" buttons, which
+   * — unlike the right-click menus — carry no implied location.
+   */
+  createNoteInChosenFolder: (opts?: { initialPath?: string }) => Promise<void>
+  /**
    * Web counterpart of the desktop drag-to-open feature: for each
    * drag-and-dropped markdown File, read its contents, create a note from
    * it (titled after the filename), and open it. The browser only exposes
@@ -1586,11 +1659,39 @@ interface Store {
   unpinReferenceForNote: (notePath: string) => void
   togglePinnedRefVisible: () => void
   setPinnedRefWidth: (px: number) => void
+  setPanelWidth: (panel: RightPanelId, px: number) => void
   setPinnedRefMode: (mode: 'edit' | 'preview') => void
 
   setQuickNoteDateTitle: (on: boolean) => void
   setQuickNoteTitlePrefix: (prefix: string | null) => void
   openTodayDailyNote: () => Promise<void>
+  openThisWeekWeeklyNote: () => Promise<void>
+  setTemplatePaletteOpen: (open: boolean) => void
+  /** Open the template picker scoped to a folder; the chosen template is
+   *  created there directly (no destination prompt). */
+  openTemplatePaletteForFolder: (folder: NoteFolder, subpath: string) => void
+  /** Open the template picker in 'insert' mode: the chosen template is rendered
+   *  into the active note instead of creating a new note. */
+  openTemplatePaletteForInsert: () => void
+  /** Render a template into the active note — replacing a blank/scaffold note,
+   *  otherwise inserting at the cursor — and place the caret at {{cursor}}. */
+  insertTemplateIntoActiveNote: (template: NoteTemplate) => void
+  /** Reload custom templates from disk (called on vault open and after CRUD). */
+  loadCustomTemplates: () => Promise<void>
+  saveCustomTemplate: (input: {
+    slug: string
+    raw: string
+    previousSourcePath?: string
+  }) => Promise<void>
+  deleteCustomTemplate: (sourcePath: string) => Promise<void>
+  /** Create + open a note from a template, substituting variables and placing
+   *  the caret at `{{cursor}}`. Falls back to a title prompt when the template
+   *  has no titleTemplate and no explicit title is supplied. */
+  createFromTemplate: (
+    template: NoteTemplate,
+    opts?: { folder?: NoteFolder; subpath?: string; title?: string }
+  ) => Promise<void>
+  saveActiveNoteAsTemplate: () => Promise<void>
   setWordWrap: (on: boolean) => void
   setPreviewSmoothScroll: (on: boolean) => void
   setEditorMaxWidth: (px: number) => void
@@ -2355,6 +2456,10 @@ export const useStore = create<Store>((set, get) => {
   commandPaletteInitialMode: 'main',
   bufferPaletteOpen: false,
   outlinePaletteOpen: false,
+  templatePaletteOpen: false,
+  templatePaletteMode: 'create',
+  templatePaletteTarget: null,
+  customTemplates: [],
   query: '',
   initialized: false,
   workspaceRestored: false,
@@ -2397,6 +2502,7 @@ export const useStore = create<Store>((set, get) => {
   pinnedRefPath: loadPrefs().pinnedRefPath,
   pinnedRefVisible: loadPrefs().pinnedRefVisible,
   pinnedRefWidth: loadPrefs().pinnedRefWidth,
+  panelWidths: loadPrefs().panelWidths,
   pinnedRefMode: loadPrefs().pinnedRefMode,
   quickNoteDateTitle: loadPrefs().quickNoteDateTitle,
   quickNoteTitlePrefix: loadPrefs().quickNoteTitlePrefix,
@@ -3299,6 +3405,16 @@ export const useStore = create<Store>((set, get) => {
     }
   },
 
+  createNoteInChosenFolder: async (opts) => {
+    const state = get()
+    const entered = await promptApp(
+      buildNoteDestinationPrompt(opts?.initialPath ?? '', state.folders)
+    )
+    if (entered == null) return // cancelled
+    const dest = parseTemplateDestination(entered)
+    await get().createAndOpen(dest.folder, dest.subpath, { focusTitle: true })
+  },
+
   importDroppedMarkdownFiles: async (files) => {
     const createdPaths: string[] = []
     for (const file of files) {
@@ -3831,6 +3947,11 @@ export const useStore = create<Store>((set, get) => {
     savePrefs(collectPrefs(get()))
   },
 
+  setPanelWidth: (panel, px) => {
+    set({ panelWidths: { ...get().panelWidths, [panel]: clampPanelWidth(px) } })
+    savePrefs(collectPrefs(get()))
+  },
+
   setPinnedRefMode: (mode) => {
     set({ pinnedRefMode: mode })
     savePrefs(collectPrefs(get()))
@@ -3863,7 +3984,168 @@ export const useStore = create<Store>((set, get) => {
       await get().selectNote(existing.path)
       return
     }
+    const template = resolveTemplate(state.customTemplates, settings.dailyNotes.templateId)
+    if (template) {
+      await get().createFromTemplate(template, { folder: 'inbox', subpath, title })
+      return
+    }
     await get().createAndOpen('inbox', subpath, { title })
+  },
+
+  openThisWeekWeeklyNote: async () => {
+    const state = get()
+    const settings = normalizeVaultSettings(state.vaultSettings)
+    if (!settings.weeklyNotes.enabled) return
+    const title = weeklyNoteTitle()
+    const subpath = normalizeWeeklyNotesDirectory(settings.weeklyNotes.directory)
+    const existing = state.notes.find(
+      (note) =>
+        note.folder === 'inbox' &&
+        note.title === title &&
+        noteFolderSubpath(note, settings) === subpath
+    )
+    if (existing) {
+      set({ view: { kind: 'folder', folder: 'inbox', subpath } })
+      await get().selectNote(existing.path)
+      return
+    }
+    const template = resolveTemplate(state.customTemplates, settings.weeklyNotes.templateId)
+    if (template) {
+      await get().createFromTemplate(template, { folder: 'inbox', subpath, title })
+      return
+    }
+    await get().createAndOpen('inbox', subpath, { title })
+  },
+
+  setTemplatePaletteOpen: (open) =>
+    set({ templatePaletteOpen: open, templatePaletteTarget: null, templatePaletteMode: 'create' }),
+
+  openTemplatePaletteForFolder: (folder, subpath) =>
+    set({
+      templatePaletteTarget: { folder, subpath },
+      templatePaletteOpen: true,
+      templatePaletteMode: 'create'
+    }),
+
+  openTemplatePaletteForInsert: () =>
+    set({ templatePaletteOpen: true, templatePaletteMode: 'insert', templatePaletteTarget: null }),
+
+  insertTemplateIntoActiveNote: (template) => {
+    const state = get()
+    const view = state.editorViewRef
+    const active = state.activeNote
+    if (!view || !active) return
+    const { body, cursorOffset } = renderTemplate(template.body, { title: active.title })
+    const doc = view.state.doc
+    const fullText = doc.toString().trim()
+    // A blank note or one that is still just the default `# Title` scaffold gets
+    // its whole body replaced; an in-progress note inserts at the cursor.
+    const isScaffold = fullText === '' || fullText === `# ${active.title}`.trim()
+    const range = isScaffold
+      ? { from: 0, to: doc.length }
+      : { from: view.state.selection.main.from, to: view.state.selection.main.to }
+    const anchor = range.from + (cursorOffset ?? body.length)
+    view.dispatch({
+      changes: { from: range.from, to: range.to, insert: body },
+      selection: { anchor: Math.min(anchor, range.from + body.length) },
+      scrollIntoView: true
+    })
+    view.focus()
+  },
+
+  loadCustomTemplates: async () => {
+    try {
+      const files = await window.zen.listTemplates()
+      set({ customTemplates: files.map((f) => parseCustomTemplate(f.raw, f.sourcePath)) })
+    } catch (err) {
+      console.error('loadCustomTemplates failed', err)
+      set({ customTemplates: [] })
+    }
+  },
+
+  saveCustomTemplate: async (input) => {
+    await window.zen.writeTemplate(input)
+    await get().loadCustomTemplates()
+  },
+
+  deleteCustomTemplate: async (sourcePath) => {
+    await window.zen.deleteTemplate(sourcePath)
+    await get().loadCustomTemplates()
+  },
+
+  createFromTemplate: async (template, opts) => {
+    try {
+      // 1. Destination. An explicit folder (e.g. right-click on a folder) is
+      // used directly; otherwise prompt, defaulting to the vault root so the
+      // user can just press Enter to skip — or type / pick a folder.
+      let folder: NoteFolder
+      let subpath: string
+      if (opts?.folder !== undefined) {
+        folder = opts.folder
+        subpath = opts.subpath ?? ''
+      } else {
+        const state = get()
+        // Default the prompt to the template's preferred subpath (relative to
+        // the notes root), if any; otherwise empty = vault root.
+        const initialPath =
+          !template.targetFolder || template.targetFolder === 'inbox'
+            ? template.targetSubpath ?? ''
+            : ''
+        const entered = await promptApp(
+          buildTemplateDestinationPrompt(template.name, initialPath, state.folders)
+        )
+        if (entered == null) return // cancelled
+        const dest = parseTemplateDestination(entered)
+        folder = dest.folder
+        subpath = dest.subpath
+      }
+      // 2. Title.
+      let title = opts?.title?.trim() ?? ''
+      if (!title && template.titleTemplate) {
+        title = renderTitle(template.titleTemplate, { title: '' })
+      }
+      if (!title) {
+        const entered = await promptApp({
+          title: 'New note from template',
+          description: template.name,
+          initialValue: template.name,
+          okLabel: 'Create'
+        })
+        if (entered == null) return // cancelled
+        title = entered.trim()
+      }
+      if (!title) title = template.name
+      const { body, cursorOffset } = renderTemplate(template.body, { title })
+      const meta = await window.zen.createNote(folder, title, subpath)
+      // Write the rendered body before opening so the editor never flashes the
+      // default `# Title` scaffold (mirrors importDroppedMarkdownFiles).
+      await window.zen.writeNote(meta.path, body)
+      await get().refreshNotes()
+      set({ view: { kind: 'folder', folder, subpath } })
+      if (cursorOffset != null) {
+        await get().openNoteAtOffset(meta.path, cursorOffset)
+      } else {
+        await get().selectNote(meta.path)
+      }
+    } catch (err) {
+      console.error('createFromTemplate failed', err)
+    }
+  },
+
+  saveActiveNoteAsTemplate: async () => {
+    const active = get().activeNote
+    if (!active) return
+    const name = await promptApp({
+      title: 'Save note as template',
+      description: 'Saved to .zennotes/templates and shown in the template picker.',
+      initialValue: active.title,
+      okLabel: 'Save'
+    })
+    if (name == null) return
+    const trimmed = name.trim()
+    if (!trimmed) return
+    const raw = composeTemplateFile({ name: trimmed, category: 'Custom', body: active.body })
+    await get().saveCustomTemplate({ slug: slugifyTemplateName(trimmed), raw })
   },
 
   setWordWrap: (on) => {

@@ -6,6 +6,10 @@ import type {
   ZenBridge,
   ZenCapabilities
 } from '@zennotes/bridge-contract/bridge'
+import type {
+  CustomTemplateFile,
+  WriteTemplateInput
+} from '@zennotes/bridge-contract/templates'
 import { IPC } from '@shared/ipc'
 import type {
   AppUpdateState,
@@ -58,7 +62,8 @@ const DESKTOP_CAPABILITIES: ZenCapabilities = {
   // CLI install is supported on macOS and Linux via /usr/local/bin or
   // ~/.local/bin symlinks. Windows uses a different model (PATH munging)
   // and is gated to a follow-up.
-  supportsCliInstall: process.platform === 'darwin' || process.platform === 'linux'
+  supportsCliInstall: process.platform === 'darwin' || process.platform === 'linux',
+  supportsCustomTemplates: true
 }
 
 const DESKTOP_APP_INFO: ZenAppInfo = {
@@ -267,6 +272,14 @@ const api: ZenBridge = {
     ipcRenderer.invoke(IPC.VAULT_GENERATE_DEMO_TOUR),
   removeDemoTour: (): Promise<VaultDemoTourResult> =>
     ipcRenderer.invoke(IPC.VAULT_REMOVE_DEMO_TOUR),
+  listTemplates: (): Promise<CustomTemplateFile[]> =>
+    ipcRenderer.invoke(IPC.VAULT_LIST_TEMPLATES),
+  readTemplate: (sourcePath: string): Promise<string> =>
+    ipcRenderer.invoke(IPC.VAULT_READ_TEMPLATE, sourcePath),
+  writeTemplate: (input: WriteTemplateInput): Promise<CustomTemplateFile> =>
+    ipcRenderer.invoke(IPC.VAULT_WRITE_TEMPLATE, input),
+  deleteTemplate: (sourcePath: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.VAULT_DELETE_TEMPLATE, sourcePath),
   getVaultTextSearchCapabilities: (
     paths: VaultTextSearchToolPaths = {}
   ): Promise<VaultTextSearchCapabilities> =>

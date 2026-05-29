@@ -10,6 +10,8 @@ import {
 } from '../lib/wikilinks'
 import { LazyNoteHoverPreview as NoteHoverPreview } from './LazyNoteHoverPreview'
 import { promptApp } from '../lib/prompt-requests'
+import { usePanelResize } from '../lib/use-panel-resize'
+import { PanelResizeHandle } from './PanelResizeHandle'
 
 interface MentionItem {
   note: NoteMeta
@@ -25,6 +27,9 @@ export function ConnectionsPanel({ note }: { note: NoteContent }): JSX.Element {
   const notes = useStore((s) => s.notes)
   const selectNote = useStore((s) => s.selectNote)
   const createAndOpen = useStore((s) => s.createAndOpen)
+  const panelWidth = useStore((s) => s.panelWidths.connections)
+  const setPanelWidth = useStore((s) => s.setPanelWidth)
+  const { startResize } = usePanelResize(panelWidth, (px) => setPanelWidth('connections', px))
   const focusedPanel = useStore((s) => s.focusedPanel)
   const connectionsCursorIndex = useStore((s) => s.connectionsCursorIndex)
   const connectionPreview = useStore((s) => s.connectionPreview)
@@ -224,8 +229,10 @@ export function ConnectionsPanel({ note }: { note: NoteContent }): JSX.Element {
           cancelScheduledClose()
           setFocusedPanel('connections')
         }}
-        className="flex w-[clamp(220px,28vw,304px)] shrink-0 flex-col border-l border-paper-300/70 bg-paper-50/18"
+        style={{ width: panelWidth }}
+        className="relative flex shrink-0 flex-col border-l border-paper-300/70 bg-paper-50/18"
       >
+        <PanelResizeHandle onStart={startResize} />
         <div className="border-b border-paper-300/60 px-4 py-4">
           <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-ink-400">
             Connections

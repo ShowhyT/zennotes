@@ -197,6 +197,26 @@ export function VimNav(): JSX.Element | null {
         keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderQuickCapture'),
         label: 'Quick capture',
         detail: 'Open the floating capture window.'
+      },
+      {
+        keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderTemplatePicker'),
+        label: 'New from template',
+        detail: 'Create a note from a built-in or custom template.'
+      },
+      {
+        keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderInsertTemplate'),
+        label: 'Insert template into note',
+        detail: 'Render a template into the current note.'
+      },
+      {
+        keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderDailyNote'),
+        label: "Today's daily note",
+        detail: 'Open or create the daily note for today.'
+      },
+      {
+        keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderWeeklyNote'),
+        label: "This week's note",
+        detail: 'Open or create the weekly note for this week.'
       }
     ]
     if (whichKeyState.allowEditorActions) {
@@ -585,6 +605,34 @@ export function VimNav(): JSX.Element | null {
           e.stopImmediatePropagation()
           resetLeader()
           void window.zen.toggleQuickCapture()
+          return
+        }
+        if (matchesSequenceToken(e, overrides, 'vim.leaderTemplatePicker')) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          state.setTemplatePaletteOpen(true)
+          return
+        }
+        if (matchesSequenceToken(e, overrides, 'vim.leaderInsertTemplate')) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          state.openTemplatePaletteForInsert()
+          return
+        }
+        if (matchesSequenceToken(e, overrides, 'vim.leaderDailyNote')) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          void state.openTodayDailyNote()
+          return
+        }
+        if (matchesSequenceToken(e, overrides, 'vim.leaderWeeklyNote')) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          void state.openThisWeekWeeklyNote()
           return
         }
         // Any other key cancels leader and falls through to normal routing.

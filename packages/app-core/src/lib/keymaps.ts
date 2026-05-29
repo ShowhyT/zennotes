@@ -38,6 +38,10 @@ export type KeymapId =
   | "vim.leaderNoteActions"
   | "vim.leaderFormatNote"
   | "vim.leaderQuickCapture"
+  | "vim.leaderTemplatePicker"
+  | "vim.leaderInsertTemplate"
+  | "vim.leaderDailyNote"
+  | "vim.leaderWeeklyNote"
   | "vim.panePrefix"
   | "vim.paneFocusLeft"
   | "vim.paneFocusDown"
@@ -371,6 +375,50 @@ const KEYMAP_DEFINITIONS: KeymapDefinition[] = [
     title: "Leader: open quick capture",
     description: "Open the floating quick capture window.",
     defaultBinding: "q",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderTemplatePicker",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Leader: new from template",
+    description: "Open the template picker to create a note.",
+    defaultBinding: "t",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderInsertTemplate",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Leader: insert template into note",
+    description: "Render a template into the current note.",
+    defaultBinding: "i",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderDailyNote",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Leader: today's daily note",
+    description: "Open or create today's daily note.",
+    defaultBinding: "d",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderWeeklyNote",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Leader: this week's note",
+    description: "Open or create this week's weekly note.",
+    defaultBinding: "w",
     vimOnly: true,
     maxTokens: 1,
   },

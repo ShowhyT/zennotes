@@ -15,6 +15,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { NoteContent } from '@shared/ipc'
 import { parseOutline } from '../lib/outline'
+import { useStore } from '../store'
+import { usePanelResize } from '../lib/use-panel-resize'
+import { PanelResizeHandle } from './PanelResizeHandle'
 
 interface Props {
   note: NoteContent
@@ -28,6 +31,9 @@ export function OutlinePanel({ note, activeLine, onJump }: Props): JSX.Element {
   const items = useMemo(() => parseOutline(note.body), [note.body])
   const [query, setQuery] = useState('')
   const activeItemRef = useRef<HTMLLIElement | null>(null)
+  const width = useStore((s) => s.panelWidths.outline)
+  const setPanelWidth = useStore((s) => s.setPanelWidth)
+  const { startResize } = usePanelResize(width, (px) => setPanelWidth('outline', px))
 
   // Reset the filter when the note changes so the outline reflects the
   // new document from the top.
@@ -49,8 +55,10 @@ export function OutlinePanel({ note, activeLine, onJump }: Props): JSX.Element {
   return (
     <section
       aria-label="Outline"
-      className="flex w-[clamp(208px,26vw,280px)] shrink-0 flex-col border-l border-paper-300/70 bg-paper-50/18"
+      style={{ width }}
+      className="relative flex shrink-0 flex-col border-l border-paper-300/70 bg-paper-50/18"
     >
+      <PanelResizeHandle onStart={startResize} />
       <div className="border-b border-paper-300/60 px-4 py-4">
         <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-ink-400">
           Outline

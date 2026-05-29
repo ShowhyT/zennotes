@@ -48,7 +48,8 @@ function installZen(overrides: Record<string, unknown> = {}): void {
         supportsFloatingWindows: false,
         supportsLocalFilesystemPickers: true,
         supportsRemoteWorkspace: false,
-        supportsCliInstall: false
+        supportsCliInstall: false,
+        supportsCustomTemplates: false
       }),
       listNotes: vi.fn().mockResolvedValue([makeNote('- [ ] old task')]),
       listFolders: vi.fn().mockResolvedValue([]),

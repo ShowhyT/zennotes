@@ -10,6 +10,8 @@ import {
 import type { NoteComment, NoteContent } from '@shared/ipc'
 import { useStore } from '../store'
 import { commentQuote } from '../lib/comments'
+import { usePanelResize } from '../lib/use-panel-resize'
+import { PanelResizeHandle } from './PanelResizeHandle'
 import {
   ArrowUpRightIcon,
   CheckSquareIcon,
@@ -67,6 +69,9 @@ export function CommentsPanel({
   const setActiveCommentId = useStore((s) => s.setActiveCommentId)
   const setFocusedPanel = useStore((s) => s.setFocusedPanel)
   const focusedPanel = useStore((s) => s.focusedPanel)
+  const panelWidth = useStore((s) => s.panelWidths.comments)
+  const setPanelWidth = useStore((s) => s.setPanelWidth)
+  const { startResize } = usePanelResize(panelWidth, (px) => setPanelWidth('comments', px))
 
   const [body, setBody] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -178,11 +183,13 @@ export function CommentsPanel({
       tabIndex={-1}
       onMouseDownCapture={() => setFocusedPanel('comments')}
       onFocusCapture={() => setFocusedPanel('comments')}
+      style={{ width: panelWidth }}
       className={[
-        'flex w-[clamp(300px,32vw,390px)] shrink-0 flex-col border-l border-paper-300/70 bg-paper-50/24 shadow-[inset_1px_0_0_rgb(var(--z-bg)/0.25)] outline-none transition-shadow',
+        'relative flex shrink-0 flex-col border-l border-paper-300/70 bg-paper-50/24 shadow-[inset_1px_0_0_rgb(var(--z-bg)/0.25)] outline-none transition-shadow',
         commentsFocused ? 'ring-1 ring-inset ring-accent/18' : ''
       ].join(' ')}
     >
+      <PanelResizeHandle onStart={startResize} />
       <div className="border-b border-paper-300/60 px-5 py-4">
         <div className="flex items-center justify-between gap-3">
           <div>

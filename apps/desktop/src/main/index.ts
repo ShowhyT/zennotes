@@ -93,6 +93,13 @@ import {
   writeNote
 } from './vault'
 import {
+  listCustomTemplates,
+  readCustomTemplate,
+  writeCustomTemplate,
+  deleteCustomTemplate
+} from './templates'
+import type { WriteTemplateInput } from '@zennotes/bridge-contract/templates'
+import {
   deleteRemoteWorkspaceSecret,
   getRemoteWorkspaceSecret,
   setRemoteWorkspaceSecret
@@ -2037,6 +2044,39 @@ function registerIpc(): void {
     }
     const v = requireVault()
     return await removeDemoTour(v.root)
+  })
+
+  // Custom templates live on the local filesystem only; remote vaults fall
+  // back to built-in templates (renderer constants), so list returns empty and
+  // mutations are rejected.
+  handle(IPC.VAULT_LIST_TEMPLATES, async () => {
+    if (isRemoteWorkspaceActive()) return []
+    const v = requireVault()
+    return await listCustomTemplates(v.root)
+  })
+
+  handle(IPC.VAULT_READ_TEMPLATE, async (_e, sourcePath: string) => {
+    if (isRemoteWorkspaceActive()) {
+      throw new Error('Custom templates are unavailable on remote vaults')
+    }
+    const v = requireVault()
+    return await readCustomTemplate(v.root, sourcePath)
+  })
+
+  handle(IPC.VAULT_WRITE_TEMPLATE, async (_e, input: WriteTemplateInput) => {
+    if (isRemoteWorkspaceActive()) {
+      throw new Error('Custom templates are unavailable on remote vaults')
+    }
+    const v = requireVault()
+    return await writeCustomTemplate(v.root, input)
+  })
+
+  handle(IPC.VAULT_DELETE_TEMPLATE, async (_e, sourcePath: string) => {
+    if (isRemoteWorkspaceActive()) {
+      throw new Error('Custom templates are unavailable on remote vaults')
+    }
+    const v = requireVault()
+    return await deleteCustomTemplate(v.root, sourcePath)
   })
 
   handle(IPC.VAULT_TEXT_SEARCH_CAPABILITIES, async (_e, paths: VaultTextSearchToolPaths = {}) => {

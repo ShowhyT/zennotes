@@ -3,9 +3,14 @@
  * vault switching. Theme rows live-preview while vault rows switch
  * workspaces only when explicitly selected.
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { buildCommands, type Command } from '../lib/commands'
+import {
+  loadRecentCommandIds,
+  recordCommandUse,
+  RECENT_COMMAND_COUNT
+} from '../lib/command-history'
 import { rankItems } from '../lib/fuzzy-score'
 import { isPaletteNextKey, isPalettePreviousKey } from '../lib/palette-nav'
 import { THEMES, type ThemeFamily, type ThemeMode, type ThemeOption } from '../lib/themes'
@@ -43,6 +48,7 @@ export function CommandPalette(): JSX.Element {
   const [mode, setMode] = useState<Mode>(initialMode)
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
+  const [recentIds, setRecentIds] = useState<string[]>(() => loadRecentCommandIds())
   const inputRef = useRef<HTMLInputElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
 
@@ -53,15 +59,32 @@ export function CommandPalette(): JSX.Element {
 
   const allCommands = useMemo(() => buildCommands(), [])
 
-  const commandResults = useMemo<Command[]>(
-    () =>
-      rankItems(allCommands, query, [
-        { get: (c) => c.title, weight: 1 },
-        { get: (c) => c.keywords, weight: 0.7 },
-        { get: (c) => c.category, weight: 0.5 }
-      ]),
-    [allCommands, query]
-  )
+  // Recently-used commands surfaced at the top — only with an empty query, in
+  // command mode. `allCommands` is already filtered by each command's `when`
+  // guard, so unavailable recents are skipped (and the next one fills in).
+  const recentCommands = useMemo<Command[]>(() => {
+    if (query.trim() || mode !== 'main') return []
+    const byId = new Map(allCommands.map((c) => [c.id, c]))
+    const out: Command[] = []
+    for (const id of recentIds) {
+      const cmd = byId.get(id)
+      if (cmd) out.push(cmd)
+      if (out.length >= RECENT_COMMAND_COUNT) break
+    }
+    return out
+  }, [query, mode, allCommands, recentIds])
+
+  const commandResults = useMemo<Command[]>(() => {
+    const ranked = rankItems(allCommands, query, [
+      { get: (c) => c.title, weight: 1 },
+      { get: (c) => c.keywords, weight: 0.7 },
+      { get: (c) => c.category, weight: 0.5 }
+    ])
+    if (recentCommands.length === 0) return ranked
+    // Pull recents to the top; drop their duplicates from the rest.
+    const recentSet = new Set(recentCommands.map((c) => c.id))
+    return [...recentCommands, ...ranked.filter((c) => !recentSet.has(c.id))]
+  }, [allCommands, query, recentCommands])
 
   const themeResults = useMemo<ThemeOption[]>(
     () =>
@@ -197,6 +220,7 @@ export function CommandPalette(): JSX.Element {
 
   /* -------- Actions -------- */
   const runCommand = async (cmd: Command): Promise<void> => {
+    setRecentIds(recordCommandUse(cmd.id))
     if (cmd.id === 'ui.themes') {
       enterThemeMode()
       inputRef.current?.focus()
@@ -317,28 +341,39 @@ export function CommandPalette(): JSX.Element {
             </div>
           ) : mode === 'main' ? (
             commandResults.map((cmd, i) => (
-              <button
-                key={cmd.id}
-                data-cmd-idx={i}
-                onClick={() => void runCommand(cmd)}
-                onMouseMove={() => setActive(i)}
-                className={[
-                  'flex w-full min-w-0 items-center gap-3 px-4 py-2 text-left',
-                  i === active ? 'bg-paper-200' : 'hover:bg-paper-200/70'
-                ].join(' ')}
-              >
-                <span className="shrink-0 text-[11px] uppercase tracking-wide text-ink-400">
-                  {cmd.category}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-sm text-ink-900">
-                  {cmd.title}
-                </span>
-                {cmd.shortcut && (
-                  <span className="shrink-0 rounded bg-paper-200/80 px-1.5 py-0.5 text-[11px] text-ink-500">
-                    {cmd.shortcut}
-                  </span>
+              <Fragment key={cmd.id}>
+                {recentCommands.length > 0 && i === 0 && (
+                  <div className="px-4 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-ink-400">
+                    Recent
+                  </div>
                 )}
-              </button>
+                {recentCommands.length > 0 && i === recentCommands.length && (
+                  <div className="mt-1 border-t border-paper-300/60 px-4 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-ink-400">
+                    All Commands
+                  </div>
+                )}
+                <button
+                  data-cmd-idx={i}
+                  onClick={() => void runCommand(cmd)}
+                  onMouseMove={() => setActive(i)}
+                  className={[
+                    'flex w-full min-w-0 items-center gap-3 px-4 py-2 text-left',
+                    i === active ? 'bg-paper-200' : 'hover:bg-paper-200/70'
+                  ].join(' ')}
+                >
+                  <span className="shrink-0 text-[11px] uppercase tracking-wide text-ink-400">
+                    {cmd.category}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm text-ink-900">
+                    {cmd.title}
+                  </span>
+                  {cmd.shortcut && (
+                    <span className="shrink-0 rounded bg-paper-200/80 px-1.5 py-0.5 text-[11px] text-ink-500">
+                      {cmd.shortcut}
+                    </span>
+                  )}
+                </button>
+              </Fragment>
             ))
           ) : mode === 'theme' ? (
             themeResults.map((theme, i) => {

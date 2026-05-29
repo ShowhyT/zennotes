@@ -22,6 +22,10 @@ import {
   type ZenCapabilities
 } from '@zennotes/bridge-contract/bridge'
 import type {
+  CustomTemplateFile,
+  WriteTemplateInput
+} from '@zennotes/bridge-contract/templates'
+import type {
   AppUpdateState,
   AssetMeta,
   CliInstallStatus,
@@ -68,7 +72,8 @@ const WEB_CAPABILITIES: ZenCapabilities = {
   supportsFloatingWindows: false,
   supportsLocalFilesystemPickers: false,
   supportsRemoteWorkspace: false,
-  supportsCliInstall: false
+  supportsCliInstall: false,
+  supportsCustomTemplates: false
 }
 
 const WEB_APP_INFO: ZenAppInfo = {
@@ -568,6 +573,25 @@ function removeDemoTour(): Promise<VaultDemoTourResult> {
   return jsonRequest<VaultDemoTourResult>('/demo/remove', { method: 'POST' })
 }
 
+// Custom templates require local-filesystem CRUD, which the web app does not
+// have (supportsCustomTemplates is false). Built-in templates still work since
+// they are renderer constants. List is empty; mutations are rejected.
+function listTemplates(): Promise<CustomTemplateFile[]> {
+  return Promise.resolve([])
+}
+
+function readTemplate(_sourcePath: string): Promise<string> {
+  return Promise.reject(new Error('Custom templates are unavailable on the web'))
+}
+
+function writeTemplate(_input: WriteTemplateInput): Promise<CustomTemplateFile> {
+  return Promise.reject(new Error('Custom templates are unavailable on the web'))
+}
+
+function deleteTemplate(_sourcePath: string): Promise<void> {
+  return Promise.reject(new Error('Custom templates are unavailable on the web'))
+}
+
 // --------------------------------------------------------------------
 // Assets (uploads, zen-asset URL resolution)
 // --------------------------------------------------------------------
@@ -1065,6 +1089,10 @@ export const httpBridge: ZenBridge = {
   hasAssetsDir,
   generateDemoTour,
   removeDemoTour,
+  listTemplates,
+  readTemplate,
+  writeTemplate,
+  deleteTemplate,
   getVaultTextSearchCapabilities,
   searchVaultText,
   readNote,
