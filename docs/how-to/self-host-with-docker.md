@@ -138,6 +138,40 @@ Rebuild:
 CONTENT_ROOT="$HOME/Notes/ZenNotesVault" make rebuild
 ```
 
+## Permissions
+
+If the server exits on startup with a permission error like:
+
+```text
+vault init: mkdir /workspace/inbox: permission denied
+```
+
+…the container can't write to your mounted vault. ZenNotes runs as a **non-root user** inside the container (UID `65532` in the published image), and Docker bind mounts preserve the host's ownership — so the mounted directory has to be writable by the UID the container runs as. A directory you own as your normal user is *not* writable by UID `65532`, which is why it fails even on folders you "have access to".
+
+**With `make up` / Docker Compose:** this is handled for you. The stack runs the container as your own user (`$(id -u):$(id -g)`) and creates the vault and `data` directories as you, so there's nothing to do.
+
+**Running the image directly with `docker run`:** pass `--user` so the container runs as you, and make sure both mounted directories (the vault and `data`) are owned by that user:
+
+```bash
+mkdir -p ./vault ./data
+
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -p 127.0.0.1:7878:7878 \
+  -v "$PWD/vault:/workspace" \
+  -v "$PWD/data:/data" \
+  -e ZENNOTES_AUTH_TOKEN="$(openssl rand -hex 32)" \
+  adibhanna/zennotes
+```
+
+Alternatively, instead of `--user`, give the image's default UID write access to the host directories:
+
+```bash
+sudo chown -R 65532:65532 ./vault ./data
+```
+
+Either way works — the only requirement is that the UID the container runs as can write to the mounted host directories.
+
 ## Security notes
 
 The current self-hosted model is designed around:
