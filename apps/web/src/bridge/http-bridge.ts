@@ -1224,7 +1224,7 @@ async function openNoteWindow(relPath: string): Promise<void> {
   window.open(url, '_blank', 'noopener')
 }
 
-async function openVaultWindow(): Promise<VaultInfo | null> {
+async function openVaultWindow(_root?: string): Promise<VaultInfo | null> {
   return null
 }
 

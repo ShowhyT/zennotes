@@ -1019,20 +1019,29 @@ async function ensureMainWindow(): Promise<void> {
   await creatingMainWindow
 }
 
-async function openVaultInNewWindow(parentWindow?: BrowserWindow | null): Promise<VaultInfo | null> {
-  const options: Electron.OpenDialogOptions = {
-    title: 'Open Vault in New Window',
-    properties: ['openDirectory', 'createDirectory'],
-    buttonLabel: 'Open Vault'
+async function openVaultInNewWindow(
+  parentWindow?: BrowserWindow | null,
+  root?: string | null
+): Promise<VaultInfo | null> {
+  // A known vault root opens directly in a new window; otherwise fall back to
+  // the folder picker (the "Browse for a folder…" path). (#244)
+  let target = typeof root === 'string' && root.trim() ? root.trim() : null
+  if (!target) {
+    const options: Electron.OpenDialogOptions = {
+      title: 'Open Vault in New Window',
+      properties: ['openDirectory', 'createDirectory'],
+      buttonLabel: 'Open Vault'
+    }
+    const result =
+      parentWindow && !parentWindow.isDestroyed()
+        ? await dialog.showOpenDialog(parentWindow, options)
+        : await dialog.showOpenDialog(options)
+    if (result.canceled || result.filePaths.length === 0) return null
+    target = result.filePaths[0]
   }
-  const result =
-    parentWindow && !parentWindow.isDestroyed()
-      ? await dialog.showOpenDialog(parentWindow, options)
-      : await dialog.showOpenDialog(options)
-  if (result.canceled || result.filePaths.length === 0) return null
 
   const win = await createWindow({
-    initialVaultRoot: result.filePaths[0],
+    initialVaultRoot: target,
     persistInitialVault: true
   })
   if (parentWindow && !parentWindow.isDestroyed()) {
@@ -2581,8 +2590,11 @@ function registerIpc(): void {
     openFloatingNoteWindow(relPath)
   })
 
-  handle(IPC.WINDOW_OPEN_VAULT, async (event) => {
-    return await openVaultInNewWindow(BrowserWindow.fromWebContents(event.sender))
+  handle(IPC.WINDOW_OPEN_VAULT, async (event, root?: string | null) => {
+    return await openVaultInNewWindow(
+      BrowserWindow.fromWebContents(event.sender),
+      typeof root === 'string' ? root : null
+    )
   })
 
   handle(IPC.APP_READ_EXTERNAL_FILE, async (event): Promise<ExternalFileContent> => {

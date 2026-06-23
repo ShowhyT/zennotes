@@ -441,8 +441,8 @@ const api: ZenBridge = {
   windowToggleMaximize: (): void => ipcRenderer.send(IPC.WINDOW_TOGGLE_MAXIMIZE),
   windowClose: (): void => ipcRenderer.send(IPC.WINDOW_CLOSE),
   openNoteWindow: (relPath: string): Promise<void> => ipcRenderer.invoke(IPC.WINDOW_OPEN_NOTE, relPath),
-  openVaultWindow: async (): Promise<VaultInfo | null> => {
-    const vault = await ipcRenderer.invoke(IPC.WINDOW_OPEN_VAULT)
+  openVaultWindow: async (root?: string): Promise<VaultInfo | null> => {
+    const vault = await ipcRenderer.invoke(IPC.WINDOW_OPEN_VAULT, root ?? null)
     await refreshRemoteWorkspaceInfo()
     return vault
   },

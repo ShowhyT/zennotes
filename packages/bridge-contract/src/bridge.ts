@@ -196,7 +196,9 @@ export interface ZenBridge {
   windowToggleMaximize(): void
   windowClose(): void
   openNoteWindow(relPath: string): Promise<void>
-  openVaultWindow(): Promise<VaultInfo | null>
+  /** Open a vault in a new window. With a `root`, opens that known vault
+   *  directly; without one, prompts with the folder picker. */
+  openVaultWindow(root?: string): Promise<VaultInfo | null>
 
   /** Read the markdown file bound to the current standalone editor window. */
   readExternalFile(): Promise<ExternalFileContent>
