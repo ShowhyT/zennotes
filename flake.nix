@@ -5,19 +5,23 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   };
 
-  outputs = { nixpkgs, ... }:
+  outputs =
+    { self, nixpkgs, ... }:
     let
       systems = nixpkgs.lib.platforms.linux ++ nixpkgs.lib.platforms.darwin;
 
       forAllSystems = nixpkgs.lib.genAttrs systems;
     in
     {
-      packages = forAllSystems (system:
+      packages = forAllSystems (
+        system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
           zennotes-server = pkgs.callPackage ./packaging/nix/package-server.nix { };
         in
-        { inherit zennotes-server; }
+        {
+          inherit zennotes-server;
+        }
         # The desktop package wraps the prebuilt linux-x64 release tarball, so it
         # only exists on x86_64-linux; elsewhere the server is the default.
         // (
@@ -34,20 +38,32 @@
         )
       );
 
-      devShell = forAllSystems (system:
+      devShell = forAllSystems (
+        system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
         in
         pkgs.mkShell {
+          inputsFrom = [ self.packages.${system}.default ];
           buildInputs = with pkgs; [
             go
             nodejs
             electron
             turbo
+            chromium
+
+            # for build linux images:
+            fpm
+            libarchive
+            rpm
           ];
 
           shellHook = ''
             export ELECTRON_SKIP_BINARY_DOWNLOAD=1
+            export CHROME_PATH=${pkgs.chromium}/bin/chromium
+            export USE_SYSTEM_FPM=true
+            npm install electron-vite --save-dev
+            npm install
           '';
         }
       );
